@@ -16,7 +16,7 @@ export const AuthProvider = ({ children }) => {
   })
 
   const login = (username, password) => {
-    if (username === 'admin' && password === 'skyeye2025') {
+    if (username === 'admin' && password === 'planeteye@2025') {
       setIsAuthenticated(true)
       localStorage.setItem('skyeye_auth', 'true')
       return true
