@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:5000/api'
+const API_BASE_URL = 'https://aqi-weather-api.onrender.com/api'
 
 /**
  * Calculate the center point (centroid) of a polygon geometry
