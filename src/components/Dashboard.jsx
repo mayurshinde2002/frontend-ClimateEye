@@ -6,6 +6,7 @@ import { LineChart, Line, BarChart, Bar, ScatterChart, Scatter, XAxis, YAxis, Ca
 import MapComponent from './MapComponent'
 import WeatherSection from './WeatherSection'
 import AQISection from './AQISection'
+import LiveDashboardCards from './LiveDashboardCards'
 import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData } from '../services/api'
 import './Dashboard.css'
 import './DatePicker.css'
@@ -1288,26 +1289,36 @@ const Dashboard = () => {
                 </div>
               )}
 
-              <div className="analysis-sections">
-                <WeatherSection 
-                  geometry={drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)}
-                  startDate={startDate}
-                  endDate={endDate}
-                  date={currentViewDate} 
-                  data={weatherData}
-                  isLive={viewMode === 'live'}
-                  loading={loading}
+              {viewMode === 'live' ? (
+                <LiveDashboardCards 
+                  aqiData={aqiData}
+                  weatherData={weatherData}
                 />
-                <AQISection
-                  geometry={drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)}
-                  startDate={startDate}
-                  endDate={endDate} 
-                  date={currentViewDate} 
-                  data={aqiData}
-                  isLive={viewMode === 'live'}
-                  loading={loading}
-                />
+              ) : (
+                <div className="analysis-sections">
+                  <WeatherSection 
+                    geometry={drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)}
+                    startDate={startDate}
+                    endDate={endDate}
+                    date={currentViewDate} 
+                    data={weatherData}
+                    isLive={viewMode === 'live'}
+                    loading={loading}
+                  />
+                  <AQISection
+                    geometry={drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)}
+                    startDate={startDate}
+                    endDate={endDate} 
+                    date={currentViewDate} 
+                    data={aqiData}
+                    isLive={viewMode === 'live'}
+                    loading={loading}
+                  />
+                </div>
+              )}
 
+              {viewMode !== 'live' && (
+                <>
                 {/* AQI Chart */}
                 <div className="aqi-chart-container">
                   <div className="chart-header">
@@ -1567,8 +1578,8 @@ const Dashboard = () => {
                     </div>
                   )}
                 </div>
-              </div>
-
+                </>
+              )}
             </div>
           )}
         </main>
