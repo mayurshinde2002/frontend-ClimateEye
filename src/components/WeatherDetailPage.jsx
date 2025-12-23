@@ -320,7 +320,7 @@ const WeatherDetailPage = () => {
                     <td>{record.condition || 'N/A'}</td>
                     <td>
                       <span className={`source-badge ${record.data_source.toLowerCase().replace('/', '-')}`}>
-                        {record.data_source}
+                        {record.data_source == "History/Estimate" ? "S" : "A"}
                       </span>
                     </td>
                   </tr>

@@ -1,6 +1,6 @@
 .live-dashboard-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+  grid-template-columns: repeat(2, minmax(500px, 1fr));
   gap: 1rem;
   padding: 1.5rem;
   background: #0a0e27;

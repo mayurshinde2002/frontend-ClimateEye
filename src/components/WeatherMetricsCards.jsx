@@ -184,7 +184,7 @@ const WeatherMetricsCards = ({ geometry, date, isLive = false }) => {
     <div className="weather-metrics-container">
       <div className="metrics-grid">
         {/* Wind Speed Card */}
-        <div className="metric-card wind-card" style={{ gridColumn: '1 / span 2', gridRow: '1' }}>
+        <div className="metric-card wind-card" style={{ gridColumn: '1', gridRow: '1' }}>
           <div className="metric-icon">
             <span className="metric-emoji">🌪️</span>
           </div>
@@ -209,7 +209,7 @@ const WeatherMetricsCards = ({ geometry, date, isLive = false }) => {
         </div>
 
         {/* Cloud Cover & Visibility Card */}
-        <div className="metric-card cloud-card" style={{ gridColumn: '3', gridRow: '1' }}>
+        <div className="metric-card cloud-card" style={{ gridColumn: '2', gridRow: '1' }}>
           <div className="metric-icon">
             <span className="metric-emoji">☁️</span>
           </div>
@@ -227,7 +227,7 @@ const WeatherMetricsCards = ({ geometry, date, isLive = false }) => {
         </div>
 
         {/* Pressure Card */}
-        <div className="metric-card pressure-card" style={{ gridColumn: '4', gridRow: '1' }}>
+        <div className="metric-card pressure-card" style={{ gridColumn: '3', gridRow: '1' }}>
           <div className="metric-icon">
             <span className="metric-emoji">🌡️</span>
           </div>
@@ -247,7 +247,7 @@ const WeatherMetricsCards = ({ geometry, date, isLive = false }) => {
         </div>
 
         {/* Precipitation Card */}
-        <div className="metric-card precipitation-card" style={{ gridColumn: '1', gridRow: '2' }}>
+        <div className="metric-card precipitation-card" style={{ gridColumn: '4', gridRow: '1' }}>
           <div className="metric-icon">
             <span className="metric-emoji">⛈️</span>
           </div>
@@ -261,7 +261,7 @@ const WeatherMetricsCards = ({ geometry, date, isLive = false }) => {
         </div>
 
         {/* UV Index Card */}
-        <div className="metric-card uv-card" style={{ gridColumn: '2 / span 3', gridRow: '2' }}>
+        <div className="metric-card uv-card" style={{ gridColumn: '5', gridRow: '1' }}>
           <div className="metric-icon">
             <span className="metric-emoji">☀️</span>
           </div>

@@ -604,25 +604,29 @@ const Dashboard = () => {
           }))
         }
       } else if (viewMode === 'daily') {
-        // Daily: Last 24 hours - X-axis shows 1, 2, 3, ..., 24
-        const aqiHourly = await fetchHourlyAQIData(latitude, longitude, today)
-        const records = aqiHourly.hourly_records || []
-        
-        // Get last 24 hours of records
+        // Daily: Last 24 hours from current time - X-axis shows 1, 2, 3, ..., 24
         const twentyFourHoursAgo = subHours(now, 24)
+        const startDate = format(twentyFourHoursAgo, 'yyyy-MM-dd')
+        const endDate = today
+        
+        // Fetch data from 24 hours ago to today (may span 2 calendar days)
+        const aqiRange = await fetchHourlyAQIDataRange(latitude, longitude, startDate, endDate)
+        const records = aqiRange.hourly_records || []
+        
+        // Get last 24 hours of records from current time
         const last24HoursRecords = records
           .filter(r => {
             if (!r || r.aqi === null || r.aqi === undefined) return false
             const recordTime = parseISO(r.date)
-            return recordTime >= twentyFourHoursAgo
+            return recordTime >= twentyFourHoursAgo && recordTime <= now
           })
           .sort((a, b) => parseISO(a.date) - parseISO(b.date))
         
-        // Create hour buckets (1-24)
+        // Create hour buckets (1-24) representing hours from 24 hours ago to now
         const hourBuckets = Array.from({ length: 24 }, (_, i) => i + 1)
         
         if (last24HoursRecords.length > 0) {
-          // Map records to hour positions
+          // Map records to hour positions (1 = 24 hours ago, 24 = current hour)
           const hourMap = new Map()
           last24HoursRecords.forEach(record => {
             const recordTime = parseISO(record.date)
@@ -642,21 +646,29 @@ const Dashboard = () => {
               ? Math.round(aqis.reduce((sum, val) => sum + val, 0) / aqis.length)
               : (last24HoursRecords[0]?.aqi || 0)
             
+            // Calculate the actual time for this hour bucket
+            const bucketTime = subHours(now, 24 - hour)
+            const timeLabel = format(bucketTime, 'HH:mm')
+            
             return {
-              time: hour.toString(),
+              time: timeLabel,
               aqi: avgAqi,
-              fullTime: now.toISOString(),
+              fullTime: bucketTime.toISOString(),
               hour: hour
             }
           })
         } else {
           // Fallback: use available records
-          chartData = hourBuckets.map((hour, idx) => ({
-            time: hour.toString(),
-            aqi: records[idx]?.aqi || records[0]?.aqi || 0,
-            fullTime: records[idx]?.date || now.toISOString(),
-            hour: hour
-          }))
+          chartData = hourBuckets.map((hour, idx) => {
+            const bucketTime = subHours(now, 24 - hour)
+            const timeLabel = format(bucketTime, 'HH:mm')
+            return {
+              time: timeLabel,
+              aqi: records[idx]?.aqi || records[0]?.aqi || 0,
+              fullTime: records[idx]?.date || bucketTime.toISOString(),
+              hour: hour
+            }
+          })
         }
       } else if (viewMode === 'weekly') {
         // Weekly: Last 7 days - X-axis shows 1st day, 2nd day, ..., 7th day
@@ -678,16 +690,17 @@ const Dashboard = () => {
             dailyData[dateKey].aqis.push(record.aqi)
           })
         
-        // Sort dates and map to day positions (1-7)
+        // Sort dates and map to actual dates
         const sortedDates = Object.keys(dailyData).sort()
         chartData = sortedDates.map((dateKey, index) => {
           const dayData = dailyData[dateKey]
           const avgAqi = Math.round(dayData.aqis.reduce((sum, val) => sum + val, 0) / dayData.aqis.length)
           const dayNumber = index + 1
-          const dayLabel = dayNumber === 7 ? '7th day/Current day' : `${dayNumber}${getDaySuffix(dayNumber)} day`
+          // Format date as "MMM dd" (e.g., "Jan 15")
+          const dateLabel = format(dayData.date, 'MMM dd')
           
           return {
-            time: dayLabel,
+            time: dateLabel,
             aqi: avgAqi,
             fullTime: dateKey,
             day: dayNumber
@@ -715,32 +728,39 @@ const Dashboard = () => {
             dailyData[dateKey].aqis.push(record.aqi)
           })
         
-        // Sort dates and map to day positions (1-30/31)
+        // Sort dates and map to actual dates
         const sortedDates = Object.keys(dailyData).sort()
         chartData = sortedDates.map((dateKey, index) => {
           const dayData = dailyData[dateKey]
           const avgAqi = Math.round(dayData.aqis.reduce((sum, val) => sum + val, 0) / dayData.aqis.length)
+          // Format date as "MMM dd" (e.g., "Jan 15")
+          const dateLabel = format(dayData.date, 'MMM dd')
           
           return {
-            time: (index + 1).toString(),
+            time: dateLabel,
             aqi: avgAqi,
             fullTime: dateKey,
             day: index + 1
           }
         })
         
-        // Ensure we have data points for all days (1-30/31)
+        // Ensure we have data points for all days with dates
         if (chartData.length < daysToShow) {
-          const dayMap = new Map()
-          chartData.forEach(d => dayMap.set(parseInt(d.time), d.aqi))
+          const dateMap = new Map()
+          chartData.forEach(d => dateMap.set(d.fullTime, d.aqi))
           
-          const allDays = Array.from({ length: daysToShow }, (_, i) => i + 1)
-          chartData = allDays.map(day => ({
-            time: day.toString(),
-            aqi: dayMap.get(day) || (chartData[0]?.aqi || 0),
-            fullTime: format(subDays(now, daysToShow - day), 'yyyy-MM-dd'),
-            day: day
-          }))
+          const allDays = Array.from({ length: daysToShow }, (_, i) => {
+            const dayDate = subDays(now, daysToShow - i - 1)
+            const dateKey = format(dayDate, 'yyyy-MM-dd')
+            const dateLabel = format(dayDate, 'MMM dd')
+            return {
+              time: dateLabel,
+              aqi: dateMap.get(dateKey) || (chartData[0]?.aqi || 0),
+              fullTime: dateKey,
+              day: i + 1
+            }
+          })
+          chartData = allDays
         }
       }
 
@@ -822,31 +842,41 @@ const Dashboard = () => {
           }
         })
       } else if (viewMode === 'daily') {
-        // Daily: Last 24 hours - X-axis: hours (1-24), Y-axis: time (HH:mm)
-        const aqiHourly = await fetchHourlyAQIData(latitude, longitude, today)
-        const records = aqiHourly.hourly_records || []
-        
+        // Daily: Last 24 hours from current time - X-axis: hours (1-24), Y-axis: time (HH:mm)
         const twentyFourHoursAgo = subHours(now, 24)
+        const startDate = format(twentyFourHoursAgo, 'yyyy-MM-dd')
+        const endDate = today
+        
+        // Fetch data from 24 hours ago to today (may span 2 calendar days)
+        const aqiRange = await fetchHourlyAQIDataRange(latitude, longitude, startDate, endDate)
+        const records = aqiRange.hourly_records || []
+        
+        // Get last 24 hours of records from current time
         const last24HoursRecords = records
           .filter(r => {
             if (!r || r.aqi === null || r.aqi === undefined) return false
             const recordTime = parseISO(r.date)
-            return recordTime >= twentyFourHoursAgo
+            return recordTime >= twentyFourHoursAgo && recordTime <= now
           })
           .sort((a, b) => parseISO(a.date) - parseISO(b.date))
         
         const hourBuckets = Array.from({ length: 24 }, (_, i) => i + 1)
         
         chartData = hourBuckets.map(hour => {
-          const targetTime = subHours(now, 24).getTime() + (24 - hour) * 60 * 60 * 1000
+          // Calculate the target time for this hour bucket (hour 1 = 24 hours ago, hour 24 = now)
+          const targetTime = subHours(now, 24 - hour)
+          const targetTimeMs = targetTime.getTime()
+          
+          // Find the closest record to this target time
           const closestRecord = last24HoursRecords.reduce((closest, record) => {
             const recordTime = parseISO(record.date).getTime()
             const closestTime = closest ? parseISO(closest.date).getTime() : null
             if (!closestTime) return record
-            return Math.abs(recordTime - targetTime) < Math.abs(closestTime - targetTime) ? record : closest
+            return Math.abs(recordTime - targetTimeMs) < Math.abs(closestTime - targetTimeMs) ? record : closest
           }, null)
           
-          const recordTime = closestRecord ? parseISO(closestRecord.date) : now
+          // Use the actual time of the record, or the target time if no record found
+          const recordTime = closestRecord ? parseISO(closestRecord.date) : targetTime
           const timeStr = format(recordTime, 'HH:mm')
           
           return {
@@ -854,7 +884,7 @@ const Dashboard = () => {
             time: timeStr,
             timeMinutes: timeToMinutes(timeStr),
             aqi: closestRecord ? closestRecord.aqi : 0,
-            fullTime: closestRecord ? closestRecord.date : now.toISOString()
+            fullTime: closestRecord ? closestRecord.date : targetTime.toISOString()
           }
         })
       } else if (viewMode === 'weekly') {
@@ -1500,22 +1530,26 @@ const Dashboard = () => {
                           textAnchor={viewMode === 'weekly' ? 'end' : viewMode === 'monthly' ? 'end' : 'middle'}
                           height={viewMode === 'weekly' ? 70 : viewMode === 'monthly' ? 60 : 40}
                           interval={viewMode === 'live' ? 4 : viewMode === 'daily' ? 2 : viewMode === 'weekly' ? 0 : viewMode === 'monthly' ? 2 : 0}
-                          label={{ value: 'Days', position: 'insideBottom', offset: -5, style: { fill: '#9ca3af' } }}
+                          label={{ 
+                            value: viewMode === 'live' ? 'Minutes' : viewMode === 'daily' ? 'Hours' : viewMode === 'weekly' ? 'Days' : viewMode === 'monthly' ? 'Days' : 'Hours', 
+                            position: 'insideBottom', 
+                            offset: -5, 
+                            style: { fill: '#9ca3af' } 
+                          }}
                         />
                         <YAxis 
                           type="number"
-                          dataKey="timeMinutes"
+                          dataKey="aqi"
                           stroke="#9ca3af"
                           style={{ fontSize: '12px' }}
                           label={{ 
-                            value: 'Time (HH:mm)', 
+                            value: 'AQI', 
                             angle: -90, 
                             position: 'insideLeft', 
                             style: { fill: '#9ca3af' } 
                           }}
-                          domain={[0, 1440]}
-                          tickFormatter={(value) => minutesToTime(value)}
-                          ticks={[0, 240, 480, 720, 960, 1200, 1440]}
+                          domain={[0, 400]}
+                          ticks={[0, 50, 100, 150, 200, 300, 400]}
                         />
                         <Tooltip 
                           contentStyle={{ 
@@ -1525,14 +1559,28 @@ const Dashboard = () => {
                             color: '#ffffff'
                           }}
                           labelStyle={{ color: '#14b8a6', fontWeight: 'bold' }}
-                          formatter={(value) => {
-                            const timeStr = minutesToTime(value)
-                            return [`Time: ${timeStr}`, '']
+                          formatter={(value) => [`AQI: ${value}`, '']}
+                          labelFormatter={(label) => {
+                            if (viewMode === 'live') return `Minute: ${label}`
+                            if (viewMode === 'daily') return `Hour: ${label}`
+                            if (viewMode === 'weekly') return `Day: ${label}`
+                            if (viewMode === 'monthly') return `Day: ${label}`
+                            return `Day: ${label}`
                           }}
-                          labelFormatter={(label) => `Day: ${label}`}
                           content={({ active, payload, label }) => {
                             if (active && payload && payload.length) {
                               const data = payload[0].payload
+                              let labelText = ''
+                              if (viewMode === 'live') {
+                                labelText = `Minute: ${label}`
+                              } else if (viewMode === 'daily') {
+                                labelText = `Hour: ${label}`
+                              } else if (viewMode === 'weekly' || viewMode === 'monthly') {
+                                labelText = `Day: ${label}`
+                              } else {
+                                labelText = `Day: ${label}`
+                              }
+                              
                               return (
                                 <div style={{
                                   backgroundColor: 'rgba(26, 31, 58, 0.95)',
@@ -1541,11 +1589,11 @@ const Dashboard = () => {
                                   padding: '12px',
                                   color: '#ffffff'
                                 }}>
-                                  <p style={{ color: '#14b8a6', fontWeight: 'bold', marginBottom: '8px' }}>
-                                    Day: {label}
-                                  </p>
-                                  <p style={{ margin: '4px 0' }}>Time: {data.time}</p>
+                                  {/* <p style={{ color: '#14b8a6', fontWeight: 'bold', marginBottom: '8px' }}>
+                                    {labelText}
+                                  </p> */}
                                   <p style={{ margin: '4px 0', color: '#14b8a6' }}>AQI: {data.aqi}</p>
+                                  <p style={{ margin: '4px 0' }}>Time: {data.time}</p>
                                 </div>
                               )
                             }
@@ -1553,17 +1601,17 @@ const Dashboard = () => {
                           }}
                         />
                         <Bar 
-                          dataKey="timeMinutes"
+                          dataKey="aqi"
                           radius={[4, 4, 0, 0]}
                         >
                           {timeChartData.map((entry, index) => {
                             const getAQIColor = (aqi) => {
-                              if (aqi <= 50) return '#10b981'
-                              if (aqi <= 100) return '#f59e0b'
-                              if (aqi <= 150) return '#f97316'
-                              if (aqi <= 200) return '#ef4444'
-                              if (aqi <= 300) return '#8b5cf6'
-                              return '#7f1d1d'
+                              if (aqi <= 50) return '#10b981' // Green - Excellent
+                              if (aqi <= 100) return '#f59e0b' // Orange - Good
+                              if (aqi <= 150) return '#f97316' // Orange - Fair
+                              if (aqi <= 200) return '#ef4444' // Red - Poor
+                              if (aqi <= 300) return '#8b5cf6' // Purple - Very Poor
+                              return '#7f1d1d' // Dark Red - Hazardous
                             }
                             return (
                               <Cell key={`cell-${index}`} fill={getAQIColor(entry.aqi || 0)} />

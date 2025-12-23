@@ -38,8 +38,8 @@
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  grid-template-rows: auto auto;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: auto;
   gap: 20px;
   width: 100%;
   max-width: 100%;
@@ -328,7 +328,7 @@
   }
 
   .metrics-grid {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 18px;
   }
 
@@ -349,8 +349,8 @@
   }
 
   .metrics-grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 18px;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 16px;
   }
 
 

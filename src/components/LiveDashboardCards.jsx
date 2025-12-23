@@ -4,12 +4,12 @@ import './LiveDashboardCards.css'
 
 const LiveDashboardCards = ({ aqiData, weatherData }) => {
   const getAQICategory = (aqi) => {
-    if (aqi <= 50) return { label: 'Excellent', color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.2)' }
-    if (aqi <= 100) return { label: 'Very Good', color: '#84cc16', bgColor: 'rgba(132, 204, 22, 0.2)' }
-    if (aqi <= 150) return { label: 'Good', color: '#fbbf24', bgColor: 'rgba(251, 191, 36, 0.2)' }
-    if (aqi <= 200) return { label: 'Fair', color: '#f97316', bgColor: 'rgba(249, 115, 22, 0.2)' }
-    if (aqi <= 300) return { label: 'Poor', color: '#ef4444', bgColor: 'rgba(239, 68, 68, 0.2)' }
-    return { label: 'Very Poor', color: '#dc2626', bgColor: 'rgba(220, 38, 38, 0.2)' }
+    if (aqi <= 50) return { label: 'Good', color: '#1abc9c', bgColor: 'rgba(26, 188, 156, 0.2)' }
+    if (aqi <= 100) return { label: 'Moderate', color: '#f39c12', bgColor: 'rgba(243, 156, 18, 0.2)' }
+    if (aqi <= 150) return { label: 'Poor', color: '#e67e22', bgColor: 'rgba(230, 126, 34, 0.2)' }
+    if (aqi <= 200) return { label: 'Unhealthy', color: '#e74c3c', bgColor: 'rgba(231, 76, 60, 0.2)' }
+    if (aqi <= 300) return { label: 'Severe', color: '#9b59b6', bgColor: 'rgba(155, 89, 182, 0.2)' }
+    return { label: 'Hazardous', color: '#c0392b', bgColor: 'rgba(192, 57, 43, 0.2)' }
   }
 
   const getGaugeAngle = (aqi) => {
@@ -24,15 +24,17 @@ const LiveDashboardCards = ({ aqiData, weatherData }) => {
 
   const getSegmentInfo = () => {
     // Semi-circle gauge: 180° arc from right (0°) to left (180°)
-    // Segments ordered from left (VERY POOR) to right (EXCELLENT)
+    // Segments ordered from left (Hazardous) to right (Good)
     // Each segment covers 30° (180/6 = 30)
+    // Matching the horizontal bar: Good (0-50), Moderate (51-100), Poor (101-150), 
+    // Unhealthy (151-200), Severe (201-300), Hazardous (301+)
     return [
-      { label: 'VERY POOR', color: '#dc2626', start: 300, end: 400, angleStart: 150, angleEnd: 180 },
-      { label: 'POOR', color: '#ef4444', start: 200, end: 300, angleStart: 120, angleEnd: 150 },
-      { label: 'FAIR', color: '#f97316', start: 150, end: 200, angleStart: 90, angleEnd: 120 },
-      { label: 'GOOD', color: '#fbbf24', start: 100, end: 150, angleStart: 60, angleEnd: 90 },
-      { label: 'VERY GOOD', color: '#84cc16', start: 50, end: 100, angleStart: 30, angleEnd: 60 },
-      { label: 'EXCELLENT', color: '#10b981', start: 0, end: 50, angleStart: 0, angleEnd: 30 }
+      { label: 'HAZARDOUS', color: '#c0392b', start: 301, end: 400, angleStart: 150, angleEnd: 180 },
+      { label: 'SEVERE', color: '#9b59b6', start: 201, end: 300, angleStart: 120, angleEnd: 150 },
+      { label: 'UNHEALTHY', color: '#e74c3c', start: 151, end: 200, angleStart: 90, angleEnd: 120 },
+      { label: 'POOR', color: '#e67e22', start: 101, end: 150, angleStart: 60, angleEnd: 90 },
+      { label: 'MODERATE', color: '#f39c12', start: 51, end: 100, angleStart: 30, angleEnd: 60 },
+      { label: 'GOOD', color: '#1abc9c', start: 0, end: 50, angleStart: 0, angleEnd: 30 }
     ]
   }
 
@@ -292,13 +294,13 @@ const LiveDashboardCards = ({ aqiData, weatherData }) => {
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path>
               </svg>
-              <span>{weatherData.humidity || 0}%</span>
+              <span>{weatherData.humidity.toFixed(2) || 0}%</span>
             </div>
             <div className="weather-item">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"></path>
               </svg>
-              <span>Wind Speed {weatherData.wind_speed || 0}</span>
+              <span>Wind Speed {weatherData.wind_speed.toFixed(2) || 0}</span>
             </div>
             <div className="weather-item">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

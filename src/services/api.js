@@ -8,7 +8,7 @@ export const calculateGeometryCenter = (geometry) => {
     return null
   }
 
-  const coordinates = geometry.coordinates[0] // First ring of polygon
+  const coordinates = geometry.coordinates[0] 
   let sumLat = 0
   let sumLng = 0
 

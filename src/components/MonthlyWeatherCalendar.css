@@ -130,7 +130,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 0.25rem;
   transition: all 0.3s ease;
 }
 
@@ -173,6 +174,24 @@
   font-weight: 700;
   font-size: 0.875rem;
   align-self: flex-start;
+}
+
+.aqi-value {
+  font-size: 2.5rem;
+  font-weight: 700;
+  padding: 0.2rem 0.2rem;
+  border-radius: 4px;
+  /* background: rgba(0, 0, 0, 0.5); */
+  text-align: center;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: visible;
+  z-index: 1;
+  min-height: 20px;
+  line-height: 1.2;
 }
 
 .weather-icon {

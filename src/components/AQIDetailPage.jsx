@@ -212,43 +212,17 @@ const AQIDetailPage = () => {
     const getTimeKey = (date) => {
       const parsedDate = parseISO(date)
       if (viewMode === 'live') {
-        // Live: Show minutes (1, 5, 10, ..., 60)
-        const now = new Date()
-        const minutesDiff = Math.floor((now - parsedDate) / (1000 * 60))
-        const minutePosition = 60 - minutesDiff
-        return minutePosition > 0 ? minutePosition.toString() : format(parsedDate, 'HH:mm')
+        // Live: Show time in HH:mm format for better readability
+        return format(parsedDate, 'HH:mm')
       } else if (viewMode === 'daily') {
-        // Daily: Show hours (1-24)
-        const now = new Date()
-        const hoursDiff = Math.floor((now - parsedDate) / (1000 * 60 * 60))
-        const hourPosition = 24 - hoursDiff
-        return hourPosition > 0 ? hourPosition.toString() : format(parsedDate, 'HH:mm')
+        // Daily: Show time in HH:mm format
+        return format(parsedDate, 'HH:mm')
       } else if (viewMode === 'weekly') {
-        // Weekly: Show days (1st day, 2nd day, ..., 7th day)
-        const today = startOfDay(new Date())
-        const recordDay = startOfDay(parsedDate)
-        const daysDiff = Math.floor((today - recordDay) / (1000 * 60 * 60 * 24))
-        const dayNumber = 7 - daysDiff
-        if (dayNumber >= 1 && dayNumber <= 7) {
-          const getDaySuffix = (day) => {
-            if (day >= 11 && day <= 13) return 'th'
-            switch (day % 10) {
-              case 1: return 'st'
-              case 2: return 'nd'
-              case 3: return 'rd'
-              default: return 'th'
-            }
-          }
-          return dayNumber === 7 ? '7th day/Current day' : `${dayNumber}${getDaySuffix(dayNumber)} day`
-        }
+        // Weekly: Show actual dates (MMM dd format, e.g., "Jan 15")
         return format(parsedDate, 'MMM dd')
       } else if (viewMode === 'monthly') {
-        // Monthly: Show days (1-30/31)
-        const today = startOfDay(new Date())
-        const recordDay = startOfDay(parsedDate)
-        const daysDiff = Math.floor((today - recordDay) / (1000 * 60 * 60 * 24))
-        const dayNumber = 30 - daysDiff
-        return dayNumber > 0 ? dayNumber.toString() : format(parsedDate, 'MMM dd')
+        // Monthly: Show actual dates (MMM dd format, e.g., "Jan 15")
+        return format(parsedDate, 'MMM dd')
       }
       return format(parsedDate, 'HH:mm')
     }
@@ -941,10 +915,10 @@ const AQIDetailPage = () => {
                     height={viewMode === 'weekly' ? 70 : viewMode === 'monthly' ? 60 : 40}
                     interval={viewMode === 'live' ? 4 : viewMode === 'daily' ? 2 : viewMode === 'weekly' ? 0 : viewMode === 'monthly' ? 2 : 0}
                     label={{ 
-                      value: viewMode === 'live' ? 'Minutes (1-60)' : 
-                             viewMode === 'daily' ? 'Hours (1-24)' : 
+                      value: viewMode === 'live' ? 'Time (HH:mm)' : 
+                             viewMode === 'daily' ? 'Time (HH:mm)' : 
                              viewMode === 'weekly' ? 'Days' : 
-                             viewMode === 'monthly' ? 'Days (1-30/31)' : 
+                             viewMode === 'monthly' ? 'Days' : 
                              'Time (HH:mm)', 
                       position: 'insideBottom', 
                       offset: -5, 
@@ -989,10 +963,10 @@ const AQIDetailPage = () => {
                     height={viewMode === 'weekly' ? 70 : viewMode === 'monthly' ? 60 : 40}
                     interval={viewMode === 'live' ? 4 : viewMode === 'daily' ? 2 : viewMode === 'weekly' ? 0 : viewMode === 'monthly' ? 2 : 0}
                     label={{ 
-                      value: viewMode === 'live' ? 'Minutes (1-60)' : 
-                             viewMode === 'daily' ? 'Hours (1-24)' : 
+                      value: viewMode === 'live' ? 'Time (HH:mm)' : 
+                             viewMode === 'daily' ? 'Time (HH:mm)' : 
                              viewMode === 'weekly' ? 'Days' : 
-                             viewMode === 'monthly' ? 'Days (1-30/31)' : 
+                             viewMode === 'monthly' ? 'Days' : 
                              'Time (HH:mm)', 
                       position: 'insideBottom', 
                       offset: -5, 

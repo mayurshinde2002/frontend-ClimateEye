@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react'
-import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isToday, isSameMonth, getMonth, getYear } from 'date-fns'
-import { fetchMonthlyWeatherData, calculateGeometryCenter } from '../services/api'
+import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isToday, isSameMonth, getMonth, getYear, startOfDay, subDays } from 'date-fns'
+import { fetchMonthlyWeatherData, calculateGeometryCenter, fetchHourlyAQIDataRange, fetchHourlyAQIData } from '../services/api'
 import './MonthlyWeatherCalendar.css'
 
 const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
   const [monthlyData, setMonthlyData] = useState(null)
+  const [aqiData, setAqiData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [coordinates, setCoordinates] = useState(null)
@@ -37,14 +38,131 @@ const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
       const year = date.getFullYear()
       const month = date.getMonth() + 1
 
-      const data = await fetchMonthlyWeatherData(coordinates.latitude, coordinates.longitude, year, month)
-      setMonthlyData(data)
+      // Fetch weather data first
+      const weatherData = await fetchMonthlyWeatherData(coordinates.latitude, coordinates.longitude, year, month)
+      setMonthlyData(weatherData)
+
+      // Try to fetch AQI data - first try range endpoint, then fallback to day-by-day
+      const monthStart = startOfMonth(date)
+      const monthEnd = endOfMonth(date)
+      const today = new Date()
+      const todayStr = format(today, 'yyyy-MM-dd')
+      
+      // Only fetch up to today (don't fetch future dates)
+      const endDate = today < monthEnd ? today : monthEnd
+      const startDateStr = format(monthStart, 'yyyy-MM-dd')
+      const endDateStr = format(endDate, 'yyyy-MM-dd')
+
+      let aqiRangeData = null
+      try {
+        // Try range endpoint first
+        aqiRangeData = await fetchHourlyAQIDataRange(coordinates.latitude, coordinates.longitude, startDateStr, endDateStr)
+        console.log('AQI Range endpoint succeeded, records:', aqiRangeData?.hourly_records?.length || 0)
+      } catch (err) {
+        console.warn('AQI Range endpoint failed (500 error), trying day-by-day fetch:', err.message)
+        // Fallback: Fetch day by day for days in the month up to today
+        const allDays = eachDayOfInterval({ start: monthStart, end: endDate })
+        const aqiPromises = []
+        
+        console.log(`Fetching AQI for ${allDays.length} days (from ${startDateStr} to ${endDateStr})...`)
+        
+        // Fetch for each day in the month (up to today)
+        for (const dayDate of allDays) {
+          const dayStr = format(dayDate, 'yyyy-MM-dd')
+          // Don't fetch future dates
+          if (dayDate <= today) {
+            aqiPromises.push(
+              fetchHourlyAQIData(coordinates.latitude, coordinates.longitude, dayStr)
+                .then(result => {
+                  if (result && result.hourly_records && result.hourly_records.length > 0) {
+                    console.log(`✓ Successfully fetched ${result.hourly_records.length} records for ${dayStr}`)
+                    return { date: dayStr, records: result.hourly_records }
+                  } else {
+                    console.log(`⚠ No records returned for ${dayStr}`)
+                    return null
+                  }
+                })
+                .catch(e => {
+                  console.warn(`✗ Failed to fetch AQI for ${dayStr}:`, e.message)
+                  return null
+                })
+            )
+          }
+        }
+        
+        const aqiResults = await Promise.all(aqiPromises)
+        // Combine all hourly records
+        const allRecords = []
+        let successCount = 0
+        aqiResults.forEach((result, index) => {
+          if (result && result.records && result.records.length > 0) {
+            allRecords.push(...result.records)
+            successCount++
+          }
+        })
+        
+        console.log(`Day-by-day fetch: ${successCount} days succeeded, ${allRecords.length} total records`)
+        
+        if (allRecords.length > 0) {
+          aqiRangeData = { hourly_records: allRecords }
+          console.log('AQI Day-by-day fetch succeeded, total records:', allRecords.length)
+        } else {
+          console.log('No AQI records found in day-by-day fetch. Check if API has data for these dates.')
+        }
+      }
+      
+      // Process AQI data to find highest AQI for each day
+      if (aqiRangeData && aqiRangeData.hourly_records) {
+        console.log('AQI Records received:', aqiRangeData.hourly_records.length)
+        const dailyMaxAQI = {}
+        aqiRangeData.hourly_records.forEach(record => {
+          if (record && record.aqi !== null && record.aqi !== undefined) {
+            try {
+              const recordDate = parseISO(record.date)
+              const normalizedDate = startOfDay(recordDate)
+              const dateKey = format(normalizedDate, 'yyyy-MM-dd')
+              
+              if (!dailyMaxAQI[dateKey] || record.aqi > dailyMaxAQI[dateKey]) {
+                dailyMaxAQI[dateKey] = record.aqi
+              }
+            } catch (e) {
+              console.error('Error parsing date:', record.date, e)
+            }
+          }
+        })
+        console.log('Daily Max AQI processed:', dailyMaxAQI)
+        console.log('Sample dates:', Object.keys(dailyMaxAQI).slice(0, 5))
+        setAqiData(dailyMaxAQI)
+      } else {
+        console.log('No AQI data available')
+        setAqiData(null)
+      }
     } catch (err) {
       setError(err.message)
       console.error('Error fetching monthly weather data:', err)
     } finally {
       setLoading(false)
     }
+  }
+
+  // Get AQI color based on value
+  const getAQIColor = (aqi) => {
+    if (aqi <= 50) return '#1abc9c' // Good - Teal Green
+    if (aqi <= 100) return '#f39c12' // Moderate - Orange
+    if (aqi <= 150) return '#e67e22' // Poor - Darker Orange
+    if (aqi <= 200) return '#e74c3c' // Unhealthy - Red
+    if (aqi <= 300) return '#9b59b6' // Severe - Purple
+    return '#c0392b' // Hazardous - Dark Red
+  }
+
+  // Get AQI background color (lighter version)
+  const getAQIBgColor = (aqi) => {
+    if (aqi <= 50) return 'rgba(26, 188, 156, 0.25)' // Good
+    if (aqi <= 100) return 'rgba(243, 156, 18, 0.25)' // Moderate
+    if (aqi <= 150) return 'rgba(230, 126, 34, 0.25)' // Poor
+    if (aqi <= 200) return 'rgba(231, 76, 60, 0.25)' // Unhealthy
+    if (aqi <= 300) return 'rgba(155, 89, 182, 0.25)' // Severe
+    return 'rgba(192, 57, 43, 0.25)' // Hazardous
   }
 
   const getWeatherIcon = (icon) => {
@@ -224,18 +342,45 @@ const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
             
             const { date: dayDate, record } = dayData
             const isTodayDate = isToday(dayDate)
+            const dayStr = format(startOfDay(dayDate), 'yyyy-MM-dd')
+            const dayAQI = aqiData && aqiData[dayStr] !== undefined ? aqiData[dayStr] : null
+            
+            // Debug: log first few days
+            if (dayDate.getDate() <= 3 && aqiData) {
+              console.log('Looking up AQI for day:', {
+                day: dayDate.getDate(),
+                dayStr: dayStr,
+                dayAQI: dayAQI,
+                availableKeys: Object.keys(aqiData).slice(0, 5),
+                matchFound: aqiData[dayStr] !== undefined
+              })
+            }
             
             // Only render if it's a valid day of the current month
             if (!isSameMonth(dayDate, date)) {
               return null
             }
             
+            // Get background color based on AQI
+            const aqiBgColor = dayAQI !== null ? getAQIBgColor(dayAQI) : null
+            const aqiColor = dayAQI !== null ? getAQIColor(dayAQI) : null
+            
             return (
               <div 
                 key={format(dayDate, 'yyyy-MM-dd')} 
                 className={`calendar-day ${isTodayDate ? 'today' : ''}`}
+                style={aqiBgColor ? { backgroundColor: aqiBgColor, borderColor: aqiColor } : {}}
               >
                 <div className="day-number">{dayDate.getDate()}</div>
+                {dayAQI !== null && dayAQI !== undefined ? (
+                  <div className="aqi-value" style={{ color: aqiColor , fontSize: '1rem'}}>
+                    AQI: {Math.round(dayAQI)}
+                  </div>
+                ) : (
+                  <div className="aqi-value" style={{ color: '#9ca3af', opacity: 0.6 , fontSize: '1rem'}}>
+                    AQI: -
+                  </div>
+                )}
                 {record ? (
                   <>
                     <div className="weather-icon">
