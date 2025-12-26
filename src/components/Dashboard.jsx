@@ -1295,7 +1295,7 @@ const Dashboard = () => {
                   onClick={() => handleViewModeChange('daily')}
                   disabled={loading}
                 >
-                  Daily
+                  Last 24 Hrs Data
                 </button>
                 <button
                   className={`view-mode-button ${viewMode === 'weekly' ? 'active' : ''}`}
@@ -1323,6 +1323,8 @@ const Dashboard = () => {
                 <LiveDashboardCards 
                   aqiData={aqiData}
                   weatherData={weatherData}
+                  geometry={drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)}
+                  date={format(new Date(), 'yyyy-MM-dd')}
                 />
               ) : (
                 <div className="analysis-sections">
@@ -1334,6 +1336,7 @@ const Dashboard = () => {
                     data={weatherData}
                     isLive={viewMode === 'live'}
                     loading={loading}
+                    viewMode={viewMode}
                   />
                   <AQISection
                     geometry={drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)}
@@ -1343,6 +1346,7 @@ const Dashboard = () => {
                     data={aqiData}
                     isLive={viewMode === 'live'}
                     loading={loading}
+                    viewMode={viewMode}
                   />
                 </div>
               )}
@@ -1392,48 +1396,48 @@ const Dashboard = () => {
                         <ReferenceArea 
                           y1={0} 
                           y2={50} 
-                          fill="#10b981" 
-                          fillOpacity={0.25}
+                          fill="#10B981" 
+                          fillOpacity={0.6}
                           stroke="none"
                         />
                         {/* Moderate: 51-100 (Orange) */}
                         <ReferenceArea 
                           y1={50} 
                           y2={100} 
-                          fill="#f59e0b" 
-                          fillOpacity={0.25}
+                          fill="#F59E0B" 
+                          fillOpacity={0.6}
                           stroke="none"
                         />
                         {/* Poor: 101-150 (Dark Orange/Brown) */}
                         <ReferenceArea 
                           y1={100} 
                           y2={150} 
-                          fill="#f97316" 
-                          fillOpacity={0.25}
+                          fill="#F97316" 
+                          fillOpacity={0.6}
                           stroke="none"
                         />
                         {/* Unhealthy: 151-200 (Red) */}
                         <ReferenceArea 
                           y1={150} 
                           y2={200} 
-                          fill="#ef4444" 
-                          fillOpacity={0.25}
+                          fill="#EF4444" 
+                          fillOpacity={0.6}
                           stroke="none"
                         />
                         {/* Severe: 201-300 (Purple) */}
                         <ReferenceArea 
                           y1={200} 
                           y2={300} 
-                          fill="#8b5cf6" 
-                          fillOpacity={0.25}
+                          fill="#8B5CF6" 
+                          fillOpacity={0.6}
                           stroke="none"
                         />
                         {/* Hazardous: 301+ (Dark Red) */}
                         <ReferenceArea 
                           y1={300} 
                           y2={400} 
-                          fill="#7f1d1d" 
-                          fillOpacity={0.25}
+                          fill="#7F1D1D" 
+                          fillOpacity={0.6}
                           stroke="none"
                         />
                         
@@ -1590,9 +1594,6 @@ const Dashboard = () => {
                                   padding: '12px',
                                   color: '#ffffff'
                                 }}>
-                                  {/* <p style={{ color: '#14b8a6', fontWeight: 'bold', marginBottom: '8px' }}>
-                                    {labelText}
-                                  </p> */}
                                   <p style={{ margin: '4px 0', color: '#14b8a6' }}>AQI: {data.aqi}</p>
                                   <p style={{ margin: '4px 0' }}>Time: {data.time}</p>
                                 </div>

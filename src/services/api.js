@@ -260,3 +260,32 @@ export const fetchMonthlyWeatherData = async (latitude, longitude, year, month) 
   }
 }
 
+/**
+ * Fetch AQI analysis from backend
+ */
+export const fetchAQIAnalysis = async (latitude, longitude, date) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/aqi/analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        latitude,
+        longitude,
+        date
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`AQI Analysis API error: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+    return data
+  } catch (error) {
+    console.error('Error fetching AQI analysis:', error)
+    throw error
+  }
+}
+

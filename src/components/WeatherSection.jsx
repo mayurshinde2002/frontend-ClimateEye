@@ -2,7 +2,7 @@ import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import './WeatherSection.css'
 
-const WeatherSection = ({ date, data, isLive = false, loading = false, geometry, startDate, endDate, onClick }) => {
+const WeatherSection = ({ date, data, isLive = false, loading = false, geometry, startDate, endDate, onClick, viewMode }) => {
   const navigate = useNavigate()
   // Transform API data to component format
   const weatherData = data ? {
@@ -50,13 +50,31 @@ const WeatherSection = ({ date, data, isLive = false, loading = false, geometry,
       onClick()
     } else {
       // Navigate to detail page with state
+      // If viewMode is 'weekly', pass weeklyMode flag and calculate last 7 days
+      // If viewMode is 'daily', pass dailyMode flag
+      const isWeeklyMode = viewMode === 'weekly'
+      const isDailyMode = viewMode === 'daily'
+      let weeklyStartDate = startDate
+      let weeklyEndDate = endDate
+      
+      if (isWeeklyMode) {
+        // Calculate last 7 days from today
+        const today = new Date()
+        const sevenDaysAgo = new Date(today)
+        sevenDaysAgo.setDate(today.getDate() - 6) // 6 days ago + today = 7 days
+        weeklyStartDate = sevenDaysAgo.toISOString().split('T')[0]
+        weeklyEndDate = today.toISOString().split('T')[0]
+      }
+      
       navigate('/weather-detail', {
         state: {
           geometry,
-          startDate,
-          endDate,
+          startDate: isWeeklyMode ? weeklyStartDate : startDate,
+          endDate: isWeeklyMode ? weeklyEndDate : endDate,
           currentDate: date,
-          showAnalysis: true // Indicate that analysis view should be restored
+          showAnalysis: true, // Indicate that analysis view should be restored
+          weeklyMode: isWeeklyMode, // Pass weekly mode flag
+          dailyMode: isDailyMode // Pass daily mode flag
         }
       })
     }

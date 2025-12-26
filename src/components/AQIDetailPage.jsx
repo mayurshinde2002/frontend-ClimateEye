@@ -4,12 +4,13 @@ import { format, parseISO, subDays, addDays, isToday, startOfDay, subHours } fro
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import * as XLSX from 'xlsx'
 import { fetchHourlyAQIData, fetchHourlyWeatherData, fetchHourlyAQIDataRange, calculateGeometryCenter } from '../services/api'
+import HourlyAQICards from './HourlyAQICards'
 import './AQIDetailPage.css'
 
 const AQIDetailPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { geometry, startDate, endDate, currentDate, showAnalysis } = location.state || {}
+  const { geometry, startDate, endDate, currentDate, showAnalysis, dailyMode } = location.state || {}
   
   const [selectedDate, setSelectedDate] = useState(currentDate || format(new Date(), 'yyyy-MM-dd'))
   const [hourlyAQIData, setHourlyAQIData] = useState([])
@@ -426,7 +427,7 @@ const AQIDetailPage = () => {
     if (!active || !payload || !payload.length) return null
     
     return (
-      <div className="custom-tooltip">
+      <div className="custom-tooltip" >
         <div className="tooltip-header">
           <strong>Time: {label}</strong>
         </div>
@@ -531,7 +532,7 @@ const AQIDetailPage = () => {
         entry['SO₂ (µg/m³)'] = record.so2 !== null && record.so2 !== undefined ? record.so2.toFixed(2) : 'N/A'
         entry['O₃ (µg/m³)'] = record.o3 !== null && record.o3 !== undefined ? record.o3.toFixed(2) : 'N/A'
         entry['Trend'] = record.trend ? `${record.trend} ${record.trend_percentage !== null && record.trend_percentage !== undefined ? `${record.trend_percentage}%` : ''}` : 'N/A'
-        entry['Data Source'] = record.data_source || 'N/A'
+        entry['Data Source'] = record.data_source==="History/Estimate" ? "S" : "A" || 'N/A'
       })
       
       // Add Weather data
@@ -662,7 +663,6 @@ const AQIDetailPage = () => {
           <p className="subtitle">Comprehensive analysis of selected parameters</p>
         </div>
         <div className="header-actions">
-        <div className="header-actions">
           <button className="export-button" onClick={handleExportData} disabled={(!hourlyAQIData || hourlyAQIData.length === 0) && (!hourlyWeatherData || hourlyWeatherData.length === 0)}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -671,7 +671,6 @@ const AQIDetailPage = () => {
             </svg>
             Export Data
           </button>
-        </div>
         </div>
       </div>
 
@@ -699,7 +698,16 @@ const AQIDetailPage = () => {
         </button>
       </div>
 
-      {/* Data Visualization Section */}
+      {/* Hourly AQI Cards for Daily Mode */}
+      {dailyMode && coordinates && (
+        <HourlyAQICards 
+          geometry={geometry} 
+          date={selectedDate}
+        />
+      )}
+
+      {/* Data Visualization Section - Only show when not in daily mode */}
+      {!dailyMode && (
       <div className="visualization-section">
         <div className="section-header">
           <div className="section-title-with-icon">
@@ -741,37 +749,7 @@ const AQIDetailPage = () => {
           </div>
         </div>
 
-        {/* View Mode Buttons */}
-        {/* <div className="view-mode-buttons">
-          <button
-            className={`view-mode-button ${viewMode === 'live' ? 'active' : ''}`}
-            onClick={() => setViewMode('live')}
-            disabled={loading}
-          >
-            Live
-          </button>
-          <button
-            className={`view-mode-button ${viewMode === 'daily' ? 'active' : ''}`}
-            onClick={() => setViewMode('daily')}
-            disabled={loading}
-          >
-            Daily
-          </button>
-          <button
-            className={`view-mode-button ${viewMode === 'weekly' ? 'active' : ''}`}
-            onClick={() => setViewMode('weekly')}
-            disabled={loading}
-          >
-            Weekly
-          </button>
-          <button
-            className={`view-mode-button ${viewMode === 'monthly' ? 'active' : ''}`}
-            onClick={() => setViewMode('monthly')}
-            disabled={loading}
-          >
-            Monthly
-          </button>
-        </div> */}
+       
 
         {/* Parameters Selection */}
         <div className="parameters-section">
@@ -790,7 +768,7 @@ const AQIDetailPage = () => {
             onClick={() => setViewMode('daily')}
             disabled={loading}
           >
-            Daily
+            Last 24 Hrs Data
           </button>
           <button
             className={`view-mode-button ${viewMode === 'weekly' ? 'active' : ''}`}
@@ -930,7 +908,7 @@ const AQIDetailPage = () => {
                     style={{ fontSize: '12px' }}
                     label={{ value: 'Value', angle: -90, position: 'insideLeft', style: { fill: '#9ca3af' } }}
                   />
-                  <Tooltip content={<CustomTooltip />} />
+                  <Tooltip content={<CustomTooltip />}  />
                   <Legend 
                     wrapperStyle={{ color: '#e2e8f0' }}
                   />
@@ -990,6 +968,7 @@ const AQIDetailPage = () => {
                         dataKey={paramKey} 
                         fill={param.color}
                         name={param.label}
+                        style={{ zIndex: -10 }}
                       />
                     ) : null
                   })}
@@ -1003,8 +982,11 @@ const AQIDetailPage = () => {
           </div>
         )}
       </div>
+      )}
 
-      {/* Hourly Table */}
+      {/* Hourly Table - Only show when not in daily mode */}
+      {!dailyMode && (
+      <>
       {loading && hourlyAQIData.length === 0 && hourlyWeatherData.length === 0 ? (
         <div className="loading-state">
           <div className="loading-spinner"></div>
@@ -1095,6 +1077,8 @@ const AQIDetailPage = () => {
         <div className="no-data">
           <p>No hourly data available for this date.</p>
         </div>
+      )}
+      </>
       )}
     </div>
   )

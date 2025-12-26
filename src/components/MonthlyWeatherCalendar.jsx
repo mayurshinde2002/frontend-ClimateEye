@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isToday, isSameMonth, getMonth, getYear, startOfDay, subDays, subMonths, addMonths } from 'date-fns'
-import { fetchMonthlyWeatherData, calculateGeometryCenter, fetchHourlyAQIDataRange, fetchHourlyAQIData } from '../services/api'
+import { fetchMonthlyWeatherData, calculateGeometryCenter, fetchHourlyAQIDataRange, fetchHourlyAQIData, fetchHourlyWeatherData } from '../services/api'
 import './MonthlyWeatherCalendar.css'
 
-const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
+const MonthlyWeatherCalendar = ({ geometry, selectedDate, weeklyMode = false, startDate, endDate }) => {
   const [monthlyData, setMonthlyData] = useState(null)
   const [aqiData, setAqiData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -318,6 +318,99 @@ const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
     }
   }
 
+  // Fetch data for weekly mode (last 7 days)
+  const fetchWeeklyData = async () => {
+    if (!coordinates || !startDate || !endDate) {
+      console.log('[FETCH WEEKLY DATA] Missing coordinates or date range, returning early')
+      return
+    }
+
+    console.log(`[FETCH WEEKLY DATA] Starting fetchWeeklyData for: ${startDate} to ${endDate}`)
+    setLoading(true)
+    setError(null)
+
+    try {
+      // Fetch weather and AQI data for each day in the range
+      const weekStart = parseISO(startDate)
+      const weekEnd = parseISO(endDate)
+      const allDays = eachDayOfInterval({ start: weekStart, end: weekEnd })
+      
+      const weatherPromises = []
+      const aqiPromises = []
+      
+      for (const dayDate of allDays) {
+        const dayStr = format(dayDate, 'yyyy-MM-dd')
+        weatherPromises.push(
+          fetchHourlyWeatherData(coordinates.latitude, coordinates.longitude, dayStr)
+            .then(result => ({ date: dayStr, data: result }))
+            .catch(err => {
+              console.warn(`Failed to fetch weather for ${dayStr}:`, err.message)
+              return { date: dayStr, data: null }
+            })
+        )
+        aqiPromises.push(
+          fetchHourlyAQIData(coordinates.latitude, coordinates.longitude, dayStr)
+            .then(result => ({ date: dayStr, data: result }))
+            .catch(err => {
+              console.warn(`Failed to fetch AQI for ${dayStr}:`, err.message)
+              return { date: dayStr, data: null }
+            })
+        )
+      }
+      
+      const [weatherResults, aqiResults] = await Promise.all([
+        Promise.all(weatherPromises),
+        Promise.all(aqiPromises)
+      ])
+      
+      // Process weather data into daily records format
+      const dailyRecords = weatherResults.map(({ date, data }) => {
+        if (!data || !data.hourly_records || data.hourly_records.length === 0) {
+          return null
+        }
+        
+        const records = data.hourly_records
+        // Calculate daily averages
+        const avgTemp = records.reduce((sum, r) => sum + (r.temperature || 0), 0) / records.length
+        const avgHumidity = records.reduce((sum, r) => sum + (r.humidity || 0), 0) / records.length
+        const avgWindSpeed = records.reduce((sum, r) => sum + (r.wind_speed || 0), 0) / records.length
+        const maxTemp = Math.max(...records.map(r => r.temperature || -Infinity).filter(t => t !== -Infinity))
+        const minTemp = Math.min(...records.map(r => r.temperature || Infinity).filter(t => t !== Infinity))
+        
+        return {
+          date,
+          temperature: avgTemp,
+          temperature_max: maxTemp,
+          temperature_min: minTemp,
+          humidity: avgHumidity,
+          wind_speed: avgWindSpeed,
+        }
+      }).filter(r => r !== null)
+      
+      setMonthlyData({ daily_records: dailyRecords, summary: null })
+      
+      // Process AQI data
+      const dailyMaxAQI = {}
+      aqiResults.forEach(({ date, data }) => {
+        if (data && data.hourly_records) {
+          const maxAqi = Math.max(...data.hourly_records.map(r => r.aqi || 0).filter(aqi => aqi > 0))
+          if (maxAqi > 0) {
+            dailyMaxAQI[date] = maxAqi
+          }
+        }
+      })
+      setAqiData(dailyMaxAQI)
+      
+    } catch (err) {
+      setError(`Error loading weekly data: ${err.message}`)
+      console.error('Error fetching weekly weather data:', err)
+      setMonthlyData({ daily_records: [] })
+      setAqiData(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handlePreviousMonth = () => {
     const newMonth = subMonths(currentMonth, 1)
     const today = new Date()
@@ -481,36 +574,73 @@ const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
     )
   }
 
-  if (!monthlyData) {
-    return null
-  }
-
-  // Handle case where daily_records might be empty or undefined
-  if (!monthlyData.daily_records || monthlyData.daily_records.length === 0) {
-    return (
-      <div className="monthly-weather-calendar">
-        <div className="error-message">
-          <p>No weather data available for {format(currentMonth, 'MMMM yyyy')}.</p>
+  // In weekly mode, handle empty data differently
+  if (weeklyMode) {
+    if (!monthlyData || !monthlyData.daily_records || monthlyData.daily_records.length === 0) {
+      return (
+        <div className="monthly-weather-calendar">
+          <div className="calendar-header">
+            <h2 className="calendar-title">Last 7 Days</h2>
+          </div>
+          <div className="loading-state">
+            {loading ? (
+              <>
+                <div className="loading-spinner"></div>
+                <p>Loading weekly data...</p>
+              </>
+            ) : (
+              <p>No data available for the selected week.</p>
+            )}
+          </div>
         </div>
-      </div>
-    )
+      )
+    }
+  } else {
+    if (!monthlyData) {
+      return null
+    }
+
+    // Handle case where daily_records might be empty or undefined
+    if (!monthlyData.daily_records || monthlyData.daily_records.length === 0) {
+      return (
+        <div className="monthly-weather-calendar">
+          <div className="error-message">
+            <p>No weather data available for {format(currentMonth, 'MMMM yyyy')}.</p>
+          </div>
+        </div>
+      )
+    }
   }
 
-  const monthStart = startOfMonth(currentMonth)
-  const monthEnd = endOfMonth(currentMonth)
-  const allDays = eachDayOfInterval({ start: monthStart, end: monthEnd })
-  const firstDayOfWeek = monthStart.getDay()
+  // Weekly mode: only show last 7 days
+  let allDays, firstDayOfWeek, monthName, calendarDays = []
+  
+  if (weeklyMode && startDate && endDate) {
+    const weekStart = parseISO(startDate)
+    const weekEnd = parseISO(endDate)
+    allDays = eachDayOfInterval({ start: weekStart, end: weekEnd })
+    firstDayOfWeek = weekStart.getDay()
+    monthName = `Last 7 Days (${format(weekStart, 'MMM dd')} - ${format(weekEnd, 'MMM dd, yyyy')})`
+    
+    // Add empty cells for days before week starts
+    for (let i = 0; i < firstDayOfWeek; i++) {
+      calendarDays.push(null)
+    }
+  } else {
+    // Normal monthly mode
+    const monthStart = startOfMonth(currentMonth)
+    const monthEnd = endOfMonth(currentMonth)
+    allDays = eachDayOfInterval({ start: monthStart, end: monthEnd })
+    firstDayOfWeek = monthStart.getDay()
+    monthName = format(currentMonth, 'MMMM yyyy')
+    
+    // Add empty cells for days before month starts
+    for (let i = 0; i < firstDayOfWeek; i++) {
+      calendarDays.push(null)
+    }
+  }
   
   const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  const monthName = format(currentMonth, 'MMMM yyyy')
-  
-  // Create calendar grid
-  const calendarDays = []
-  
-  // Add empty cells for days before month starts
-  for (let i = 0; i < firstDayOfWeek; i++) {
-    calendarDays.push(null)
-  }
   
   // Add all days of the month
   allDays.forEach(day => {
@@ -533,10 +663,13 @@ const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
       }
     }) || null
     
-    // Debug logging for last day of month
-    if (day.getDate() === monthEnd.getDate() && day.getMonth() === monthEnd.getMonth()) {
-      console.log(`[LAST DAY DEBUG] Day: ${dayStr}, Found record:`, record ? 'YES' : 'NO')
-      console.log(`[LAST DAY DEBUG] Available dates in daily_records:`, monthlyData.daily_records.map(r => r.date).slice(-5))
+    // Debug logging for last day (only in monthly mode)
+    if (!weeklyMode) {
+      const monthEnd = endOfMonth(currentMonth)
+      if (day.getDate() === monthEnd.getDate() && day.getMonth() === monthEnd.getMonth()) {
+        console.log(`[LAST DAY DEBUG] Day: ${dayStr}, Found record:`, record ? 'YES' : 'NO')
+        console.log(`[LAST DAY DEBUG] Available dates in daily_records:`, monthlyData.daily_records.map(r => r.date).slice(-5))
+      }
     }
     
     calendarDays.push({
@@ -548,29 +681,36 @@ const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
   return (
     <div className="monthly-weather-calendar">
       <div className="calendar-header">
-        <button 
-          className={`month-nav-button prev ${!canGoPrevious() ? 'disabled' : ''}`} 
-          onClick={handlePreviousMonth}
-          disabled={!canGoPrevious()}
-          title={!canGoPrevious() ? 'Only data for the last 3 months is available' : 'Previous Month'}
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M15 18l-6-6 6-6"/>
-          </svg>
-          Previous Month
-        </button>
-        <h2 className="calendar-title">{monthName}</h2>
-        <button 
-          className={`month-nav-button next ${!canGoNext() ? 'disabled' : ''}`} 
-          onClick={handleNextMonth}
-          disabled={!canGoNext()}
-          title={!canGoNext() ? 'Already at current month' : 'Next Month'}
-        >
-          Next Month
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M9 18l6-6-6-6"/>
-          </svg>
-        </button>
+        {!weeklyMode && (
+          <>
+            <button 
+              className={`month-nav-button prev ${!canGoPrevious() ? 'disabled' : ''}`} 
+              onClick={handlePreviousMonth}
+              disabled={!canGoPrevious()}
+              title={!canGoPrevious() ? 'Only data for the last 3 months is available' : 'Previous Month'}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M15 18l-6-6 6-6"/>
+              </svg>
+              Previous Month
+            </button>
+            <h2 className="calendar-title">{monthName}</h2>
+            <button 
+              className={`month-nav-button next ${!canGoNext() ? 'disabled' : ''}`} 
+              onClick={handleNextMonth}
+              disabled={!canGoNext()}
+              title={!canGoNext() ? 'Already at current month' : 'Next Month'}
+            >
+              Next Month
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </button>
+          </>
+        )}
+        {weeklyMode && (
+          <h2 className="calendar-title">{monthName}</h2>
+        )}
       </div>
       
       <div className="calendar-grid">
@@ -592,9 +732,16 @@ const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
             const dayStr = format(startOfDay(dayDate), 'yyyy-MM-dd')
             const dayAQI = aqiData && aqiData[dayStr] !== undefined ? aqiData[dayStr] : null
             
-            // Only render if it's a valid day of the current month
-            if (!isSameMonth(dayDate, currentMonth)) {
-              return null
+            // In weekly mode, only show days within the date range
+            if (weeklyMode && startDate && endDate) {
+              if (dayStr < startDate || dayStr > endDate) {
+                return null
+              }
+            } else {
+              // In monthly mode, only render if it's a valid day of the current month
+              if (!isSameMonth(dayDate, currentMonth)) {
+                return null
+              }
             }
             
             // Get background color based on AQI
@@ -628,7 +775,7 @@ const MonthlyWeatherCalendar = ({ geometry, selectedDate }) => {
                     </div>
                   </>
                 ) : (
-                  <div className="no-data">Data not available</div>
+                  <div className="no-data">no weather data</div>
                 )}
               </div>
             )

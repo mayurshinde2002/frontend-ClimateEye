@@ -5,12 +5,13 @@ import * as XLSX from 'xlsx'
 import { fetchHourlyWeatherData, calculateGeometryCenter } from '../services/api'
 import MonthlyWeatherCalendar from './MonthlyWeatherCalendar'
 import WeatherMetricsCards from './WeatherMetricsCards'
+import HourlyAQICards from './HourlyAQICards'
 import './WeatherDetailPage.css'
 
 const WeatherDetailPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { geometry, startDate, endDate, currentDate, showAnalysis } = location.state || {}
+  const { geometry, startDate, endDate, currentDate, showAnalysis, weeklyMode, dailyMode } = location.state || {}
   
   const [selectedDate, setSelectedDate] = useState(currentDate || format(new Date(), 'yyyy-MM-dd'))
   const [hourlyData, setHourlyData] = useState([])
@@ -136,7 +137,7 @@ const WeatherDetailPage = () => {
           'Cloud Cover (%)': record.cloud_cover !== null && record.cloud_cover !== undefined ? record.cloud_cover : 'N/A',
           'Visibility (km)': record.visibility !== null && record.visibility !== undefined ? record.visibility : 'N/A',
           'Condition': record.condition || 'N/A',
-          'Data Source': record.data_source || 'N/A'
+          'Data Source': record.data_source==="History/Estimate" ? "S" : "A" || 'N/A'
         }
       })
 
@@ -228,9 +229,25 @@ const WeatherDetailPage = () => {
       </div>
 
 
-      {/* Monthly Weather Calendar */}
+      {/* Monthly Weather Calendar or Hourly AQI Cards */}
       {coordinates && (
-        <MonthlyWeatherCalendar geometry={geometry} selectedDate={selectedDate} />
+        dailyMode ? (
+          // <HourlyAQICards 
+          //   geometry={geometry} 
+          //   date={selectedDate}
+          // />
+          <div>
+            <h1>Hourly AQI Cards</h1>
+          </div>
+        ) : (
+          <MonthlyWeatherCalendar 
+            geometry={geometry} 
+            selectedDate={selectedDate}
+            weeklyMode={weeklyMode}
+            startDate={startDate}
+            endDate={endDate}
+          />
+        )
       )}
 
       {/* Date Navigation */}

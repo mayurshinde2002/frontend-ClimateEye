@@ -2,7 +2,6 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(500px, 1fr));
   gap: 1rem;
-  padding: 1.5rem;
   background: #0a0e27;
 }
 
@@ -49,6 +48,39 @@
 
 .card-menu:hover {
   color: #14b8a6;
+}
+
+.analysis-report-button {
+  background: linear-gradient(135deg, rgba(20, 184, 166, 0.2) 0%, rgba(20, 184, 166, 0.15) 100%);
+  border: 1px solid #14b8a6;
+  color: #14b8a6;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(20, 184, 166, 0.2);
+  white-space: nowrap;
+}
+
+.analysis-report-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(20, 184, 166, 0.3) 0%, rgba(20, 184, 166, 0.25) 100%);
+  border-color: #14b8a6;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(20, 184, 166, 0.3);
+}
+
+.analysis-report-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.analysis-report-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .card-content {

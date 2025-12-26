@@ -2,7 +2,7 @@ import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import './AQISection.css'
 
-const AQISection = ({ date, data, isLive = false, loading = false, geometry, startDate, endDate, onClick }) => {
+const AQISection = ({ date, data, isLive = false, loading = false, geometry, startDate, endDate, onClick, viewMode }) => {
   const navigate = useNavigate()
   
   const handleClick = () => {
@@ -10,13 +10,17 @@ const AQISection = ({ date, data, isLive = false, loading = false, geometry, sta
       onClick()
     } else {
       // Navigate to detail page with state (include showAnalysis flag)
+      // If viewMode is 'daily', pass dailyMode flag
+      const isDailyMode = viewMode === 'daily'
+      
       navigate('/aqi-detail', {
         state: {
           geometry,
           startDate,
           endDate,
           currentDate: date,
-          showAnalysis: true // Indicate we're coming from analysis view
+          showAnalysis: true, // Indicate we're coming from analysis view
+          dailyMode: isDailyMode // Pass daily mode flag
         }
       })
     }

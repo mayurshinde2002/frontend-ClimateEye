@@ -451,7 +451,7 @@
   padding: 40px 48px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
   max-width: 1600px;
   margin: 0 auto;
   box-sizing: border-box;
@@ -459,7 +459,7 @@
 
 @media (max-width: 1200px) {
   .analysis-content {
-    padding: 32px;
+    padding: 10px;
     gap: 32px;
   }
   
@@ -471,7 +471,7 @@
 
 @media (max-width: 768px) {
   .analysis-content {
-    padding: 20px;
+    padding: 10px;
     gap: 24px;
   }
   
@@ -954,7 +954,7 @@
 @media (min-width: 1601px) {
   .analysis-content {
     max-width: 1800px;
-    padding: 48px 56px;
+    padding: 24px 24px;
   }
 }
 
@@ -962,7 +962,7 @@
 @media (min-width: 1441px) and (max-width: 1600px) {
   .analysis-content {
     max-width: 1600px;
-    padding: 40px 48px;
+    padding: 20px 20px;
   }
 }
 
@@ -970,7 +970,7 @@
 @media (min-width: 1281px) and (max-width: 1440px) {
   .analysis-content {
     max-width: 1400px;
-    padding: 36px 40px;
+    padding: 18px 18px;
   }
 
   .sidebar {
@@ -995,7 +995,7 @@
   }
 
   .analysis-content {
-    padding: 32px;
+    padding: 16px;
     gap: 32px;
   }
 
@@ -1063,7 +1063,7 @@
   }
 
   .analysis-content {
-    padding: 28px;
+    padding: 14px;
     gap: 28px;
   }
 
