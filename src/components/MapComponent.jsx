@@ -76,8 +76,12 @@ const MapComponent = ({ viewType, drawnGeometry, uploadedKML, isDrawing, onGeome
   // Light theme tile layer (matching UI light colors)
   const lightTileLayer = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
   
-  // Normal color satellite tile layer (using Esri World Imagery)
+  // Satellite tile layer (using Esri World Imagery)
   const satelliteTileLayer = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+  
+  // Label layer overlay for location names only (shows place names, cities, states, countries)
+  // Using World Boundaries and Places - provides clean labels without road clutter
+  const labelTileLayer = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
 
   return (
     <div className="map-container">
@@ -88,18 +92,22 @@ const MapComponent = ({ viewType, drawnGeometry, uploadedKML, isDrawing, onGeome
         className="leaflet-map"
       >
         <MapViewUpdater viewType={viewType} polygonCoordinates={polygonCoordinates} />
-        {viewType === 'map' ? (
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-            url={lightTileLayer}
-          />
-        ) : (
-          <TileLayer
-            attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
-            url={satelliteTileLayer}
-          />
-        )}
+       
+        {/* Satellite imagery base layer */}
+        <TileLayer
+          attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
+          url={satelliteTileLayer}
+        />
         
+        {/* Label layer overlay for location names - shows place names, cities, states, countries */}
+        {/* Using World Boundaries and Places - provides clean labels (location names only) without road clutter */}
+        <TileLayer
+          attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
+          url={labelTileLayer}
+          opacity={1}
+          zIndex={1000}
+        />
+       
         {polygonCoordinates && (
           <Polygon
             positions={polygonCoordinates}

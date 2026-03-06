@@ -4,13 +4,14 @@ import { format, parseISO, subDays, addDays, isToday, startOfDay, subHours } fro
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import * as XLSX from 'xlsx'
 import { fetchHourlyAQIData, fetchHourlyWeatherData, fetchHourlyAQIDataRange, calculateGeometryCenter } from '../services/api'
+import { transformRecordsByHeight } from '../utils/dataTransformers'
 import HourlyAQICards from './HourlyAQICards'
 import './AQIDetailPage.css'
 
 const AQIDetailPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { geometry, startDate, endDate, currentDate, showAnalysis, dailyMode } = location.state || {}
+  const { geometry, startDate, endDate, currentDate, showAnalysis, dailyMode, selectedHeight } = location.state || {}
   
   const [selectedDate, setSelectedDate] = useState(currentDate || format(new Date(), 'yyyy-MM-dd'))
   const [hourlyAQIData, setHourlyAQIData] = useState([])
@@ -21,7 +22,7 @@ const AQIDetailPage = () => {
   const [chartType, setChartType] = useState('line') // 'line' or 'bar'
   const [selectedParameters, setSelectedParameters] = useState(['aqi', 'pm2_5', 'pm10']) // Default selected parameters
   const [selectionMode, setSelectionMode] = useState('multiple') // 'single' or 'multiple'
-  const [viewMode, setViewMode] = useState('live') // 'live', 'daily', 'weekly', 'monthly'
+  const [viewMode, setViewMode] = useState(dailyMode ? 'daily' : 'live') // 'live', 'daily', 'weekly', 'monthly'
 
   // Combined parameters: AQI + Weather
   const parameters = [
@@ -61,7 +62,7 @@ const AQIDetailPage = () => {
       fetchHourlyData()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDate, coordinates, viewMode])
+  }, [selectedDate, coordinates, viewMode, selectedHeight])
 
   const fetchHourlyData = async () => {
     if (!coordinates) return
@@ -83,34 +84,57 @@ const AQIDetailPage = () => {
           fetchHourlyWeatherData(coordinates.latitude, coordinates.longitude, today)
         ])
         
-        // Filter to last hour
-        aqiRecords = (aqiData.hourly_records || []).filter(r => {
+        // Transform records based on selected height, then filter to last hour
+        let processedAqiRecords = transformRecordsByHeight(aqiData.hourly_records || [], selectedHeight)
+        let processedWeatherRecords = transformRecordsByHeight(weatherData.hourly_records || [], selectedHeight)
+        
+        aqiRecords = processedAqiRecords.filter(r => {
           if (!r || !r.date) return false
           const recordTime = parseISO(r.date)
           return recordTime >= oneHourAgo
         })
         
-        weatherRecords = (weatherData.hourly_records || []).filter(r => {
+        weatherRecords = processedWeatherRecords.filter(r => {
           if (!r || !r.date) return false
           const recordTime = parseISO(r.date)
           return recordTime >= oneHourAgo
         })
       } else if (viewMode === 'daily') {
-        // Daily: Last 24 hours (today's hourly data)
-        const [aqiData, weatherData] = await Promise.all([
-          fetchHourlyAQIData(coordinates.latitude, coordinates.longitude, today),
-          fetchHourlyWeatherData(coordinates.latitude, coordinates.longitude, today)
+        // Daily: Last 24 hours from current time
+        const now = new Date()
+        const twentyFourHoursAgo = subHours(now, 24)
+        const startDate = format(twentyFourHoursAgo, 'yyyy-MM-dd')
+        const endDate = today
+        
+        // Fetch data from 24 hours ago to today (may span 2 calendar days)
+        const [aqiRange, weatherRange] = await Promise.all([
+          fetchHourlyAQIDataRange(coordinates.latitude, coordinates.longitude, startDate, endDate),
+          fetchHourlyWeatherData(coordinates.latitude, coordinates.longitude, today).catch(() => ({ hourly_records: [] }))
         ])
         
-        aqiRecords = aqiData.hourly_records || []
-        weatherRecords = weatherData.hourly_records || []
+        // Transform records based on selected height, then filter
+        let processedAqiRecords = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
+        let processedWeatherRecords = transformRecordsByHeight(weatherRange.hourly_records || [], selectedHeight)
+        
+        // Filter records to only include those in the last 24 hours
+        aqiRecords = processedAqiRecords.filter(r => {
+          if (!r || !r.date) return false
+          const recordTime = parseISO(r.date)
+          return recordTime >= twentyFourHoursAgo && recordTime <= now
+        }).sort((a, b) => parseISO(a.date) - parseISO(b.date))
+        
+        weatherRecords = processedWeatherRecords.filter(r => {
+          if (!r || !r.date) return false
+          const recordTime = parseISO(r.date)
+          return recordTime >= twentyFourHoursAgo && recordTime <= now
+        }).sort((a, b) => parseISO(a.date) - parseISO(b.date))
       } else if (viewMode === 'weekly') {
         // Weekly: Last 7 days
         const weekAgo = format(subDays(new Date(), 7), 'yyyy-MM-dd')
         
         // Fetch AQI range
         const aqiRange = await fetchHourlyAQIDataRange(coordinates.latitude, coordinates.longitude, weekAgo, today)
-        aqiRecords = aqiRange.hourly_records || []
+        aqiRecords = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
         
         // Fetch weather data for each day (no range endpoint available)
         const weatherPromises = []
@@ -119,14 +143,14 @@ const AQIDetailPage = () => {
           weatherPromises.push(fetchHourlyWeatherData(coordinates.latitude, coordinates.longitude, date))
         }
         const weatherResults = await Promise.all(weatherPromises)
-        weatherRecords = weatherResults.flatMap(r => r.hourly_records || [])
+        weatherRecords = transformRecordsByHeight(weatherResults.flatMap(r => r.hourly_records || []), selectedHeight)
       } else if (viewMode === 'monthly') {
         // Monthly: Last 30 days
         const monthAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
         
         // Fetch AQI range
         const aqiRange = await fetchHourlyAQIDataRange(coordinates.latitude, coordinates.longitude, monthAgo, today)
-        aqiRecords = aqiRange.hourly_records || []
+        aqiRecords = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
         
         // Fetch weather data for each day (no range endpoint available)
         const weatherPromises = []
@@ -135,7 +159,7 @@ const AQIDetailPage = () => {
           weatherPromises.push(fetchHourlyWeatherData(coordinates.latitude, coordinates.longitude, date))
         }
         const weatherResults = await Promise.all(weatherPromises)
-        weatherRecords = weatherResults.flatMap(r => r.hourly_records || [])
+        weatherRecords = transformRecordsByHeight(weatherResults.flatMap(r => r.hourly_records || []), selectedHeight)
       }
       
       setHourlyAQIData(aqiRecords)
@@ -532,7 +556,7 @@ const AQIDetailPage = () => {
         entry['SO₂ (µg/m³)'] = record.so2 !== null && record.so2 !== undefined ? record.so2.toFixed(2) : 'N/A'
         entry['O₃ (µg/m³)'] = record.o3 !== null && record.o3 !== undefined ? record.o3.toFixed(2) : 'N/A'
         entry['Trend'] = record.trend ? `${record.trend} ${record.trend_percentage !== null && record.trend_percentage !== undefined ? `${record.trend_percentage}%` : ''}` : 'N/A'
-        entry['Data Source'] = record.data_source==="History/Estimate" ? "S" : "A" || 'N/A'
+        entry['Data Source'] = record.data_source || 'N/A'
       })
       
       // Add Weather data
@@ -629,7 +653,7 @@ const AQIDetailPage = () => {
         <div className="error-message">
           <p>No location data available. Please go back and analyze an area first.</p>
           <button 
-            onClick={() => navigate('/dashboard', { state: { restoreAnalysis: showAnalysis || false } })} 
+            onClick={() => navigate('/dashboard', { state: { restoreAnalysis: showAnalysis || false, selectedHeight } })} 
             className="back-button"
           >
             Go Back to Dashboard
@@ -642,22 +666,23 @@ const AQIDetailPage = () => {
   return (
     <div className="aqi-detail-page">
       <div className="page-header">
-        <button 
-          onClick={() => {
-            navigate('/dashboard', { 
-              state: { 
-                restoreAnalysis: true,
-                geometry,
-                startDate,
-                endDate,
-                currentDate: currentDate || selectedDate
-              } 
-            })
-          }} 
-          className="back-button"
-        >
-          ← Back to Dashboard
-        </button>
+          <button 
+            onClick={() => {
+              navigate('/dashboard', { 
+                state: { 
+                  restoreAnalysis: true,
+                  geometry,
+                  startDate,
+                  endDate,
+                  currentDate: currentDate || selectedDate,
+                  selectedHeight // Pass selected height back
+                } 
+              })
+            }} 
+            className="back-button"
+          >
+            ← Back to Dashboard
+          </button>
         <div className="header-title">
           <h1>Climate Analysis Results</h1>
           <p className="subtitle">Comprehensive analysis of selected parameters</p>
@@ -703,6 +728,7 @@ const AQIDetailPage = () => {
         <HourlyAQICards 
           geometry={geometry} 
           date={selectedDate}
+          selectedHeight={selectedHeight}
         />
       )}
 
@@ -768,7 +794,7 @@ const AQIDetailPage = () => {
             onClick={() => setViewMode('daily')}
             disabled={loading}
           >
-            Last 24 Hrs Data
+            Daily
           </button>
           <button
             className={`view-mode-button ${viewMode === 'weekly' ? 'active' : ''}`}
@@ -984,9 +1010,7 @@ const AQIDetailPage = () => {
       </div>
       )}
 
-      {/* Hourly Table - Only show when not in daily mode */}
-      {!dailyMode && (
-      <>
+      {/* Hourly Table - Show for all modes including daily mode */}
       {loading && hourlyAQIData.length === 0 && hourlyWeatherData.length === 0 ? (
         <div className="loading-state">
           <div className="loading-spinner"></div>
@@ -1077,8 +1101,6 @@ const AQIDetailPage = () => {
         <div className="no-data">
           <p>No hourly data available for this date.</p>
         </div>
-      )}
-      </>
       )}
     </div>
   )

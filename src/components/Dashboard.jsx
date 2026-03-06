@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import { transformRecordsByHeight } from '../utils/dataTransformers'
 import { useAuth } from '../context/AuthContext'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { format, subDays, startOfDay, isAfter, addDays, isBefore, isEqual, isToday, subHours, parseISO } from 'date-fns'
@@ -10,6 +11,7 @@ import LiveDashboardCards from './LiveDashboardCards'
 import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData } from '../services/api'
 import './Dashboard.css'
 import './DatePicker.css'
+// HeightSelectionScreen.css was deleted - remove import if HeightSelectionScreen is not used
 
 const Dashboard = () => {
   const { logout } = useAuth()
@@ -36,6 +38,12 @@ const Dashboard = () => {
   const [loadingChart, setLoadingChart] = useState(false)
   const [timeChartData, setTimeChartData] = useState([]) // For Time chart
   const [loadingTimeChart, setLoadingTimeChart] = useState(false)
+  const [liveHourlyChartData, setLiveHourlyChartData] = useState([]) // Per-hour AQI for Live time series bar
+  const [selectedHeight, setSelectedHeight] = useState(null) // '0-3meter' or '3meter-above' or null
+  
+  // Refs to prevent multiple simultaneous API calls
+  const isFetchingRef = useRef(false)
+  const lastFetchKeyRef = useRef(null)
 
   useEffect(() => {
     // Update dates daily - recalculate one week ago from today
@@ -71,6 +79,10 @@ const Dashboard = () => {
       }
       if (location.state.currentDate) {
         setCurrentViewDate(location.state.currentDate)
+      }
+      // Restore selected height
+      if (location.state.selectedHeight !== undefined) {
+        setSelectedHeight(location.state.selectedHeight)
       }
       // Show analysis view
       setShowAnalysis(true)
@@ -176,7 +188,7 @@ const Dashboard = () => {
   }
 
   // Date navigation functions
-  const handlePreviousDate = () => {
+  const handlePreviousDate = async () => {
     if (!currentViewDate || loading) return
     
     const current = new Date(currentViewDate)
@@ -188,10 +200,32 @@ const Dashboard = () => {
       return
     }
     
-    setCurrentViewDate(format(prev, 'yyyy-MM-dd'))
+    const newDate = format(prev, 'yyyy-MM-dd')
+    setCurrentViewDate(newDate)
+    
+    // Fetch data for the new date when button is clicked
+    if (showAnalysis && (drawnGeometry || uploadedKML) && viewMode === 'live') {
+      let geometry = drawnGeometry
+      if (!geometry && uploadedKML) {
+        geometry = parseKMLToGeometry(uploadedKML.content)
+      }
+      if (geometry) {
+        const center = calculateGeometryCenter(geometry)
+        if (center) {
+          setLoading(true)
+          try {
+            await fetchDataForDate(center.latitude, center.longitude, newDate)
+          } catch (err) {
+            setError(err.message)
+          } finally {
+            setLoading(false)
+          }
+        }
+      }
+    }
   }
 
-  const handleNextDate = () => {
+  const handleNextDate = async () => {
     if (!currentViewDate || loading) return
     
     const current = startOfDay(new Date(currentViewDate))
@@ -202,17 +236,42 @@ const Dashboard = () => {
     // The maximum date we can navigate to is the earlier of endDate or today
     const maxDate = isBefore(end, todayDate) ? end : todayDate
     
+    let newDate
     // Don't go beyond the maximum date (allow going to maxDate itself)
     if (isAfter(next, maxDate)) {
       // If we can't go to next, but we're not at maxDate, go to maxDate
       if (isBefore(current, maxDate)) {
-        setCurrentViewDate(format(maxDate, 'yyyy-MM-dd'))
+        newDate = format(maxDate, 'yyyy-MM-dd')
+      } else {
+        return
       }
-      return
+    } else {
+      // Allow navigation if next date is equal to or before maxDate
+      newDate = format(next, 'yyyy-MM-dd')
     }
     
-    // Allow navigation if next date is equal to or before maxDate
-    setCurrentViewDate(format(next, 'yyyy-MM-dd'))
+    setCurrentViewDate(newDate)
+    
+    // Fetch data for the new date when button is clicked
+    if (showAnalysis && (drawnGeometry || uploadedKML) && viewMode === 'live') {
+      let geometry = drawnGeometry
+      if (!geometry && uploadedKML) {
+        geometry = parseKMLToGeometry(uploadedKML.content)
+      }
+      if (geometry) {
+        const center = calculateGeometryCenter(geometry)
+        if (center) {
+          setLoading(true)
+          try {
+            await fetchDataForDate(center.latitude, center.longitude, newDate)
+          } catch (err) {
+            setError(err.message)
+          } finally {
+            setLoading(false)
+          }
+        }
+      }
+    }
   }
 
   const canGoPrevious = () => {
@@ -406,12 +465,115 @@ const Dashboard = () => {
     }
   }
 
+  // Unified live data fetcher: makes 3 API calls once and processes all chart data from shared results
+  const fetchAllLiveData = async (latitude, longitude) => {
+    setLoading(true)
+    setLoadingChart(true)
+    setLoadingTimeChart(true)
+    setError(null)
+    setWeatherData(null)
+    setAqiData(null)
+    setLiveHourlyChartData([])
+    setAqiChartData([])
+    setTimeChartData([])
+
+    try {
+      const today = format(new Date(), 'yyyy-MM-dd')
+      const now = new Date()
+
+      // Single Promise.all: weather summary + AQI summary + hourly AQI (shared by both charts)
+      const [weather, aqi, aqiHourly] = await Promise.all([
+        fetchWeatherData(latitude, longitude),
+        fetchAQIData(latitude, longitude),
+        fetchHourlyAQIData(latitude, longitude, today)
+      ])
+
+      setWeatherData(weather)
+      setAqiData(aqi)
+
+      // Process hourly records once for both charts
+      const records = transformRecordsByHeight(aqiHourly.hourly_records || [], selectedHeight)
+      const oneHourAgo = subHours(now, 1)
+      const lastHourRecords = records
+        .filter(r => {
+          if (!r || r.aqi === null || r.aqi === undefined) return false
+          const recordTime = parseISO(r.date)
+          return recordTime >= oneHourAgo
+        })
+        .sort((a, b) => parseISO(a.date) - parseISO(b.date))
+
+      const minuteBuckets = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+
+      // AQI Trend chart data
+      let aqiChartResult
+      if (lastHourRecords.length > 0) {
+        aqiChartResult = minuteBuckets.map(minute => {
+          const targetTime = subHours(now, 1).getTime() + (60 - minute) * 60 * 1000
+          const closestRecord = lastHourRecords.reduce((closest, record) => {
+            const recordTime = parseISO(record.date).getTime()
+            const closestTime = closest ? parseISO(closest.date).getTime() : null
+            if (!closestTime) return record
+            return Math.abs(recordTime - targetTime) < Math.abs(closestTime - targetTime) ? record : closest
+          }, null)
+          return {
+            time: minute.toString(),
+            aqi: closestRecord ? closestRecord.aqi : (lastHourRecords[0]?.aqi || 0),
+            fullTime: closestRecord ? closestRecord.date : now.toISOString(),
+            minute
+          }
+        })
+      } else {
+        const fallback = records.slice(-12).filter(r => r && r.aqi !== null && r.aqi !== undefined)
+        aqiChartResult = minuteBuckets.map((minute, idx) => ({
+          time: minute.toString(),
+          aqi: fallback[idx]?.aqi || fallback[0]?.aqi || 0,
+          fullTime: fallback[idx]?.date || now.toISOString(),
+          minute
+        }))
+      }
+      setAqiChartData(aqiChartResult)
+
+      // Time chart data (same shared records)
+      const timeChartResult = minuteBuckets.map(minute => {
+        const targetTime = subHours(now, 1).getTime() + (60 - minute) * 60 * 1000
+        const closestRecord = lastHourRecords.reduce((closest, record) => {
+          const recordTime = parseISO(record.date).getTime()
+          const closestTime = closest ? parseISO(closest.date).getTime() : null
+          if (!closestTime) return record
+          return Math.abs(recordTime - targetTime) < Math.abs(closestTime - targetTime) ? record : closest
+        }, null)
+        const recordTime = closestRecord ? parseISO(closestRecord.date) : now
+        const timeStr = format(recordTime, 'HH:mm')
+        return {
+          day: minute.toString(),
+          time: timeStr,
+          timeMinutes: timeToMinutes(timeStr),
+          aqi: closestRecord ? closestRecord.aqi : 0,
+          fullTime: closestRecord ? closestRecord.date : now.toISOString()
+        }
+      })
+      setTimeChartData(timeChartResult)
+
+    } catch (err) {
+      setError(err.message)
+      console.error('Error fetching live data:', err)
+    } finally {
+      setLoading(false)
+      setLoadingChart(false)
+      setLoadingTimeChart(false)
+    }
+  }
+
   // Handle view mode change
   const handleViewModeChange = async (mode) => {
     setViewMode(mode)
-    // Set loading state immediately when mode changes
+    // Clear all chart data immediately so previous mode's data is not shown
+    setLiveHourlyChartData([])
+    setAqiChartData([])
+    setTimeChartData([])
     setLoadingChart(true)
-    
+    setLoadingTimeChart(true)
+
     if (showAnalysis && (drawnGeometry || uploadedKML)) {
       let geometry = drawnGeometry
       if (!geometry && uploadedKML) {
@@ -421,18 +583,25 @@ const Dashboard = () => {
       if (geometry) {
         const center = calculateGeometryCenter(geometry)
         if (center) {
-          setLoadingTimeChart(true)
-          await Promise.all([
-            fetchDataForMode(center.latitude, center.longitude),
-            fetchAQIChartData(center.latitude, center.longitude),
-            fetchTimeChartData(center.latitude, center.longitude)
-          ])
+          if (mode === 'live') {
+            // Single unified fetch for live mode — avoids duplicate API calls
+            await fetchAllLiveData(center.latitude, center.longitude)
+          } else {
+            setLoadingTimeChart(true)
+            await Promise.all([
+              fetchDataForMode(center.latitude, center.longitude),
+              fetchAQIChartData(center.latitude, center.longitude),
+              fetchTimeChartData(center.latitude, center.longitude)
+            ])
+          }
         }
       }
     } else {
-      // If not in analysis mode, still reset loading
       setLoadingChart(false)
       setLoadingTimeChart(false)
+      setLiveHourlyChartData([])
+      setAqiChartData([])
+      setTimeChartData([])
     }
   }
 
@@ -448,8 +617,12 @@ const Dashboard = () => {
     if (geometry) {
       const center = calculateGeometryCenter(geometry)
       if (center) {
-        setLoadingChart(true)
-        await fetchAQIChartData(center.latitude, center.longitude)
+        if (viewMode === 'live') {
+          await fetchAllLiveData(center.latitude, center.longitude)
+        } else {
+          setLoadingChart(true)
+          await fetchAQIChartData(center.latitude, center.longitude)
+        }
       }
     }
   }
@@ -466,8 +639,12 @@ const Dashboard = () => {
     if (geometry) {
       const center = calculateGeometryCenter(geometry)
       if (center) {
-        setLoadingTimeChart(true)
-        await fetchTimeChartData(center.latitude, center.longitude)
+        if (viewMode === 'live') {
+          await fetchAllLiveData(center.latitude, center.longitude)
+        } else {
+          setLoadingTimeChart(true)
+          await fetchTimeChartData(center.latitude, center.longitude)
+        }
       }
     }
   }
@@ -507,22 +684,10 @@ const Dashboard = () => {
       setCurrentViewDate(viewDate)
       setShowAnalysis(true)
       // Reset to live mode when starting new analysis
-      const initialMode = 'live'
-      setViewMode(initialMode)
+      setViewMode('live')
 
-      // Fetch live data for initial analysis
-      const [weather, aqi] = await Promise.all([
-        fetchWeatherData(center.latitude, center.longitude),
-        fetchAQIData(center.latitude, center.longitude)
-      ])
-      setWeatherData(weather)
-      setAqiData(aqi)
-      
-      // Fetch chart data
-      await Promise.all([
-        fetchAQIChartData(center.latitude, center.longitude),
-        fetchTimeChartData(center.latitude, center.longitude)
-      ])
+      // Single unified fetch for live mode — avoids duplicate API calls
+      await fetchAllLiveData(center.latitude, center.longitude)
     } catch (err) {
       setError(err.message)
       alert(`Error: ${err.message}`)
@@ -531,27 +696,51 @@ const Dashboard = () => {
     }
   }
 
-  // Handle date navigation - fetch data when date changes (only for date-based navigation, not view modes)
-  useEffect(() => {
-    if (showAnalysis && currentViewDate && (drawnGeometry || uploadedKML) && viewMode === 'live') {
-      let geometry = drawnGeometry
-      if (!geometry && uploadedKML) {
-        geometry = parseKMLToGeometry(uploadedKML.content)
-      }
+  // Removed automatic API call on selectedHeight change
+  // Data will only refresh when user explicitly clicks buttons or changes view mode
+  // useEffect(() => {
+  //   if (showAnalysis && currentViewDate && (drawnGeometry || uploadedKML)) {
+  //     const geometry = drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)
+  //     if (geometry) {
+  //       const center = calculateGeometryCenter(geometry)
+  //       if (center) {
+  //         if (viewMode === 'live') {
+  //           fetchDataForDate(center.latitude, center.longitude, currentViewDate)
+  //         } else {
+  //           fetchDataForMode(center.latitude, center.longitude)
+  //         }
+  //         // Refresh chart data
+  //         fetchAQIChartData(center.latitude, center.longitude)
+  //         fetchTimeChartData(center.latitude, center.longitude)
+  //       }
+  //     }
+  //   }
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [selectedHeight])
 
-      if (geometry) {
-        const center = calculateGeometryCenter(geometry)
-        if (center) {
-          fetchDataForDate(center.latitude, center.longitude, currentViewDate)
-        }
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentViewDate, showAnalysis])
+  // Removed automatic API call on date change
+  // Data will only refresh when user explicitly clicks date navigation buttons
+  // useEffect(() => {
+  //   if (showAnalysis && currentViewDate && (drawnGeometry || uploadedKML) && viewMode === 'live') {
+  //     let geometry = drawnGeometry
+  //     if (!geometry && uploadedKML) {
+  //       geometry = parseKMLToGeometry(uploadedKML.content)
+  //     }
+
+  //     if (geometry) {
+  //       const center = calculateGeometryCenter(geometry)
+  //       if (center) {
+  //         fetchDataForDate(center.latitude, center.longitude, currentViewDate)
+  //       }
+  //     }
+  //   }
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [currentViewDate, showAnalysis])
 
   // Fetch AQI chart data based on view mode
   const fetchAQIChartData = async (latitude, longitude) => {
     setLoadingChart(true)
+    setAqiChartData([])
     try {
       const today = format(new Date(), 'yyyy-MM-dd')
       const now = new Date()
@@ -560,7 +749,7 @@ const Dashboard = () => {
       if (viewMode === 'live') {
         // Live: Last 60 minutes - X-axis shows 1, 5, 10, ..., 60
         const aqiHourly = await fetchHourlyAQIData(latitude, longitude, today)
-        const records = aqiHourly.hourly_records || []
+        const records = transformRecordsByHeight(aqiHourly.hourly_records || [], selectedHeight)
         
         // Get records from the last hour (60 minutes)
         const oneHourAgo = subHours(now, 1)
@@ -611,7 +800,7 @@ const Dashboard = () => {
         
         // Fetch data from 24 hours ago to today (may span 2 calendar days)
         const aqiRange = await fetchHourlyAQIDataRange(latitude, longitude, startDate, endDate)
-        const records = aqiRange.hourly_records || []
+        const records = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
         
         // Get last 24 hours of records from current time
         const last24HoursRecords = records
@@ -675,7 +864,7 @@ const Dashboard = () => {
         const weekAgo = format(subDays(now, 6), 'yyyy-MM-dd') // 6 days ago + today = 7 days
         const aqiRange = await fetchHourlyAQIDataRange(latitude, longitude, weekAgo, today)
         console.log("7 Days data fetched", aqiRange)
-        const records = aqiRange.hourly_records || []
+        const records = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
         
         // Group by date and calculate daily averages
         const dailyData = {}
@@ -713,7 +902,7 @@ const Dashboard = () => {
         const monthAgo = format(subDays(now, daysToShow - 1), 'yyyy-MM-dd')
         const aqiRange = await fetchHourlyAQIDataRange(latitude, longitude, monthAgo, today)
         console.log("30 Days data fetched", aqiRange)
-        const records = aqiRange.hourly_records || []
+        const records = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
         
         // Group by date and calculate daily averages
         const dailyData = {}
@@ -800,6 +989,7 @@ const Dashboard = () => {
   // Fetch Time chart data based on view mode
   const fetchTimeChartData = async (latitude, longitude) => {
     setLoadingTimeChart(true)
+    setTimeChartData([])
     try {
       const today = format(new Date(), 'yyyy-MM-dd')
       const now = new Date()
@@ -808,7 +998,8 @@ const Dashboard = () => {
       if (viewMode === 'live') {
         // Live: Last 60 minutes - X-axis: minutes (1-60), Y-axis: time (HH:mm)
         const aqiHourly = await fetchHourlyAQIData(latitude, longitude, today)
-        const records = aqiHourly.hourly_records || []
+        console.log("60 Minutes data fetched", aqiHourly)
+        const records = transformRecordsByHeight(aqiHourly.hourly_records || [], selectedHeight)
         
         const oneHourAgo = subHours(now, 1)
         const lastHourRecords = records
@@ -849,7 +1040,8 @@ const Dashboard = () => {
         
         // Fetch data from 24 hours ago to today (may span 2 calendar days)
         const aqiRange = await fetchHourlyAQIDataRange(latitude, longitude, startDate, endDate)
-        const records = aqiRange.hourly_records || []
+        console.log("24 Hours data fetched", aqiRange)
+        const records = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
         
         // Get last 24 hours of records from current time
         const last24HoursRecords = records
@@ -891,7 +1083,8 @@ const Dashboard = () => {
         // Weekly: Last 7 days - X-axis: days (1-7), Y-axis: AQI values
         const weekAgo = format(subDays(now, 6), 'yyyy-MM-dd')
         const aqiRange = await fetchHourlyAQIDataRange(latitude, longitude, weekAgo, today)
-        const records = aqiRange.hourly_records || []
+        console.log("7 Days data fetched", aqiRange)
+        const records = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
         
         // Group by date and get all records with their times
         const dailyData = {}
@@ -945,7 +1138,8 @@ const Dashboard = () => {
         const daysToShow = Math.min(31, daysInMonth)
         const monthAgo = format(subDays(now, daysToShow - 1), 'yyyy-MM-dd')
         const aqiRange = await fetchHourlyAQIDataRange(latitude, longitude, monthAgo, today)
-        const records = aqiRange.hourly_records || []
+        console.log("30 Days data fetched", aqiRange)
+        const records = transformRecordsByHeight(aqiRange.hourly_records || [], selectedHeight)
         
         // Group by date and get all records with their times
         const dailyData = {}
@@ -1001,30 +1195,31 @@ const Dashboard = () => {
     }
   }
 
-  // Fetch data when view mode changes
-  useEffect(() => {
-    if (showAnalysis && (drawnGeometry || uploadedKML)) {
-      let geometry = drawnGeometry
-      if (!geometry && uploadedKML) {
-        geometry = parseKMLToGeometry(uploadedKML.content)
-      }
+  // Removed automatic API call on view mode change
+  // Data will only refresh when user explicitly clicks view mode buttons (60 Minutes, 24 Hours, etc.)
+  // useEffect(() => {
+  //   if (showAnalysis && (drawnGeometry || uploadedKML)) {
+  //     let geometry = drawnGeometry
+  //     if (!geometry && uploadedKML) {
+  //       geometry = parseKMLToGeometry(uploadedKML.content)
+  //     }
 
-      if (geometry) {
-        const center = calculateGeometryCenter(geometry)
-        if (center) {
-          // Set loading state when view mode changes
-          setLoadingChart(true)
-          setLoadingTimeChart(true)
-          Promise.all([
-            fetchDataForMode(center.latitude, center.longitude),
-            fetchAQIChartData(center.latitude, center.longitude),
-            fetchTimeChartData(center.latitude, center.longitude)
-          ])
-        }
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode])
+  //     if (geometry) {
+  //       const center = calculateGeometryCenter(geometry)
+  //       if (center) {
+  //         // Set loading state when view mode changes
+  //         setLoadingChart(true)
+  //         setLoadingTimeChart(true)
+  //         Promise.all([
+  //           fetchDataForMode(center.latitude, center.longitude),
+  //           fetchAQIChartData(center.latitude, center.longitude),
+  //           fetchTimeChartData(center.latitude, center.longitude)
+  //         ])
+  //       }
+  //     }
+  //   }
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [viewMode])
 
   return (
     <div className="dashboard">
@@ -1170,6 +1365,34 @@ const Dashboard = () => {
                   />
                 </div>
 
+                <div className="height-selection-section">
+                  <h2 className="sidebar-title">HEIGHT SELECTION</h2>
+                  <div className="height-buttons">
+                    {/* <button
+                      className={`height-button ${selectedHeight === '0-3meter' ? 'active' : ''}`}
+                      onClick={() => {
+                        console.log('[Dashboard] Setting selectedHeight to 0-3meter')
+                        setSelectedHeight('0-3meter')
+                      }}
+                      disabled={loading}
+                      title="View data from 0-3 meters height"
+                    >
+                      0-3 Meter
+                    </button> */}
+                    {/* <button
+                      className={`height-button ${selectedHeight === '3meter-above' || selectedHeight === null ? 'active' : ''}`}
+                      onClick={() => {
+                        console.log('[Dashboard] Setting selectedHeight to 3meter-above')
+                        setSelectedHeight('3meter-above')
+                      }}
+                      disabled={loading}
+                      title="View data from 3 meters above"
+                    >
+                      3 Meter Above
+                    </button> */}
+                  </div>
+                </div>
+
                 <button 
                   className="update-button" 
                   onClick={handleAnalyse}
@@ -1295,7 +1518,7 @@ const Dashboard = () => {
                   onClick={() => handleViewModeChange('daily')}
                   disabled={loading}
                 >
-                  Last 24 Hrs Data
+                  Last 24 Hrs
                 </button>
                 <button
                   className={`view-mode-button ${viewMode === 'weekly' ? 'active' : ''}`}
@@ -1325,6 +1548,7 @@ const Dashboard = () => {
                   weatherData={weatherData}
                   geometry={drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)}
                   date={format(new Date(), 'yyyy-MM-dd')}
+                  selectedHeight={selectedHeight}
                 />
               ) : (
                 <div className="analysis-sections">
@@ -1337,6 +1561,7 @@ const Dashboard = () => {
                     isLive={viewMode === 'live'}
                     loading={loading}
                     viewMode={viewMode}
+                    selectedHeight={selectedHeight}
                   />
                   <AQISection
                     geometry={drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null)}
@@ -1347,6 +1572,7 @@ const Dashboard = () => {
                     isLive={viewMode === 'live'}
                     loading={loading}
                     viewMode={viewMode}
+                    selectedHeight={selectedHeight}
                   />
                 </div>
               )}
@@ -1487,7 +1713,7 @@ const Dashboard = () => {
                 </div>
 
                 {/* Time Chart */}
-                <div className="aqi-chart-container">
+                {/* <div className="aqi-chart-container">
                   <div className="chart-header">
                     <h3 className="chart-title">Time Chart</h3>
                     <div className="chart-header-right">
@@ -1627,7 +1853,7 @@ const Dashboard = () => {
                       <p>No time chart data available</p>
                     </div>
                   )}
-                </div>
+                </div> */}
                 </>
               )}
             </div>

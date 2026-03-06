@@ -1,8 +1,9 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
+import { extractDataByHeight } from '../utils/dataTransformers'
 import './AQISection.css'
 
-const AQISection = ({ date, data, isLive = false, loading = false, geometry, startDate, endDate, onClick, viewMode }) => {
+const AQISection = ({ date, data, isLive = false, loading = false, geometry, startDate, endDate, onClick, viewMode, selectedHeight }) => {
   const navigate = useNavigate()
   
   const handleClick = () => {
@@ -20,21 +21,31 @@ const AQISection = ({ date, data, isLive = false, loading = false, geometry, sta
           endDate,
           currentDate: date,
           showAnalysis: true, // Indicate we're coming from analysis view
-          dailyMode: isDailyMode // Pass daily mode flag
+          dailyMode: isDailyMode, // Pass daily mode flag
+          selectedHeight // Pass selected height
         }
       })
     }
   }
-  // Transform API data to component format
-  const aqiData = data ? {
-    aqi: data.aqi || null,
-    pm25: data.pm2_5 || null,
-    pm10: data.pm10 || null,
-    co: data.co || null,
-    so2: data.so2 || null,
-    no2: data.no2 || null,
-    o3: data.o3 || null,
-    date: data.date || date
+  
+  // Transform API data based on selected height, then to component format
+  const transformedData = data ? extractDataByHeight(data, selectedHeight) : null
+  
+  // Debug log to verify selectedHeight prop and transformation
+  if (data) {
+    console.log(`[AQISection] selectedHeight: ${selectedHeight || 'null'}, Original AQI: ${data.aqi}, aqi_0to3m: ${data.aqi_0to3m}, Transformed AQI: ${transformedData?.aqi}`)
+    console.log(`[AQISection] Data keys:`, Object.keys(data))
+  }
+  
+  const aqiData = transformedData ? {
+    aqi: transformedData.aqi || null,
+    pm25: transformedData.pm2_5 || null,
+    pm10: transformedData.pm10 || null,
+    co: transformedData.co || null,
+    so2: transformedData.so2 || null,
+    no2: transformedData.no2 || null,
+    o3: transformedData.o3 || null,
+    date: transformedData.date || date
   } : null
 
   const getAQICategory = (aqi) => {
@@ -117,27 +128,27 @@ const AQISection = ({ date, data, isLive = false, loading = false, geometry, sta
         <div className="pollutant-levels">
           <div className="pollutant-item">
             <span className="pollutant-label">PM2.5</span>
-            <span className="pollutant-value">{aqiData.pm25.toFixed(2)} µg/m³</span>
+            <span className="pollutant-value">{aqiData.pm25 !== null && aqiData.pm25 !== undefined ? aqiData.pm25.toFixed(2) : 'N/A'} µg/m³</span>
           </div>
           <div className="pollutant-item">
             <span className="pollutant-label">PM10</span>
-            <span className="pollutant-value">{aqiData.pm10.toFixed(2)  } µg/m³</span>
+            <span className="pollutant-value">{aqiData.pm10 !== null && aqiData.pm10 !== undefined ? aqiData.pm10.toFixed(2) : 'N/A'} µg/m³</span>
           </div>
           <div className="pollutant-item">
             <span className="pollutant-label">CO</span>
-            <span className="pollutant-value">{aqiData.co.toFixed(2)} ppm</span>
+            <span className="pollutant-value">{aqiData.co !== null && aqiData.co !== undefined ? aqiData.co.toFixed(2) : 'N/A'} ppm</span>
           </div>
           <div className="pollutant-item">
             <span className="pollutant-label">SO₂</span>
-            <span className="pollutant-value">{aqiData.so2.toFixed(2)} µg/m³</span>
+            <span className="pollutant-value">{aqiData.so2 !== null && aqiData.so2 !== undefined ? aqiData.so2.toFixed(2) : 'N/A'} µg/m³</span>
           </div>
           <div className="pollutant-item">
             <span className="pollutant-label">NO₂</span>
-            <span className="pollutant-value">{aqiData.no2.toFixed(2)} µg/m³</span>
+            <span className="pollutant-value">{aqiData.no2 !== null && aqiData.no2 !== undefined ? aqiData.no2.toFixed(2) : 'N/A'} µg/m³</span>
           </div>
           <div className="pollutant-item">
             <span className="pollutant-label">O₃</span>
-            <span className="pollutant-value">{aqiData.o3.toFixed(2)} µg/m³</span>
+            <span className="pollutant-value">{aqiData.o3 !== null && aqiData.o3 !== undefined ? aqiData.o3.toFixed(2) : 'N/A'} µg/m³</span>
           </div>
         </div>
 

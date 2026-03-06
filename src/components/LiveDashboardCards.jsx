@@ -1,10 +1,11 @@
 import React, { useState } from 'react'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend } from 'recharts'
 import { calculateGeometryCenter } from '../services/api'
+import { extractDataByHeight } from '../utils/dataTransformers'
 import AQIAnalysisReport from './AQIAnalysisReport'
 import './LiveDashboardCards.css'
 
-const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
+const LiveDashboardCards = ({ aqiData, weatherData, geometry, date, selectedHeight }) => {
   const [showAnalysisReport, setShowAnalysisReport] = useState(false)
   
   // Get coordinates from geometry
@@ -63,7 +64,11 @@ const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
     ]
   }
 
-  if (!aqiData || !weatherData) {
+  // Transform data based on selected height
+  const processedAqiData = aqiData ? extractDataByHeight(aqiData, selectedHeight) : null
+  const processedWeatherData = weatherData ? extractDataByHeight(weatherData, selectedHeight) : null
+
+  if (!processedAqiData || !processedWeatherData) {
     return (
       <div className="live-dashboard-cards">
         <div className="loading-state">
@@ -74,7 +79,7 @@ const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
     )
   }
 
-  const aqi = aqiData.aqi || 0
+  const aqi = processedAqiData.aqi || 0
   const category = getAQICategory(aqi)
   const gaugeAngle = getGaugeAngle(aqi)
 
@@ -82,27 +87,27 @@ const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
   const pollutantData = [
     {
       name: 'PM2.5',
-      value: aqiData.pm2_5 || aqiData.pm25 || 0,
+      value: processedAqiData.pm2_5 || processedAqiData.pm25 || 0,
       color: '#1e40af'
     },
     {
       name: 'PM10',
-      value: aqiData.pm10 || 0,
+      value: processedAqiData.pm10 || 0,
       color: '#10b981'
     },
     {
       name: 'NO2',
-      value: aqiData.no2 || 0,
+      value: processedAqiData.no2 || 0,
       color: '#84cc16'
     },
     {
       name: 'SO2',
-      value: aqiData.so2 || 0,
+      value: processedAqiData.so2 || 0,
       color: '#f97316'
     },
     {
       name: 'O3',
-      value: aqiData.o3 || 0,
+      value: processedAqiData.o3 || 0,
       color: '#94a3b8'
     }
   ]
@@ -110,15 +115,15 @@ const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
   // Calculate percentages for AQI metrics
   const aqiPercentage = aqi > 0 ? Math.min((aqi / 300) * 100, 100) : 0
   const pm10Percentage = pollutantData[1].value > 0 ? Math.min((pollutantData[1].value / 100) * 100, 100) : 0
-  const precipitation = weatherData.precipitation || weatherData.precipitation_mm || 0
+  const precipitation = processedWeatherData.precipitation || processedWeatherData.precipitation_mm || 0
   const precipitationPercentage = precipitation > 0 ? Math.min((precipitation / 50) * 100, 100) : 0
 
   // UV & Visibility data - using current data and estimated values
-  const currentUV = weatherData.uv_index || weatherData.uv_index_max || 0
-  const currentVisibility = weatherData.visibility || 10
-  const currentPM25 = aqiData.pm2_5 || aqiData.pm25 || 0
-  const currentPM10 = aqiData.pm10 || 0
-  const currentNO2 = aqiData.no2 || 0
+  const currentUV = processedWeatherData.uv_index || processedWeatherData.uv_index_max || 0
+  const currentVisibility = processedWeatherData.visibility || 10
+  const currentPM25 = processedAqiData.pm2_5 || processedAqiData.pm25 || 0
+  const currentPM10 = processedAqiData.pm10 || 0
+  const currentNO2 = processedAqiData.no2 || 0
   
   const uvVisibilityData = [
     { 
@@ -186,7 +191,7 @@ const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
       <div className="dashboard-card aqi-gauge-card">
         <div className="card-header">
           <h3 className="card-title">Air Quality Index</h3>
-          <button 
+          {/* <button 
             className="analysis-report-button" 
             onClick={() => setShowAnalysisReport(!showAnalysisReport)}
             disabled={!coordinates || !date}
@@ -200,7 +205,7 @@ const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
               <polyline points="10 9 9 9 8 9"></polyline>
             </svg>
             Analysis Report
-          </button>
+          </button> */}
         </div>
         <div className="card-content">
           <div className="aqi-gauge-container">
@@ -367,19 +372,19 @@ const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
                 <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
                 <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
               </svg>
-              <span>{weatherData.temperature || 0}°C</span>
+              <span>{processedWeatherData.temperature || 0}°C</span>
             </div>
             <div className="weather-item">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path>
               </svg>
-              <span>{weatherData.humidity.toFixed(2) || 0}%</span>
+              <span>{processedWeatherData.humidity.toFixed(2) || 0}%</span>
             </div>
             <div className="weather-item">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"></path>
               </svg>
-              <span>Wind Speed {weatherData.wind_speed.toFixed(2) || 0}</span>
+              <span>Wind Speed {processedWeatherData.wind_speed.toFixed(2) || 0}</span>
             </div>
             <div className="weather-item">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -480,16 +485,21 @@ const LiveDashboardCards = ({ aqiData, weatherData, geometry, date }) => {
         </div>
       </div>
 
-      {/* AQI Analysis Report */}
-      {showAnalysisReport && coordinates && date && (
-        <div style={{ gridColumn: '1 / -1', marginTop: '24px' }}>
+      <div style={{ gridColumn: '1 / -1', marginTop: '24px' }}>
           <AQIAnalysisReport 
             latitude={coordinates.latitude}
             longitude={coordinates.longitude}
             date={date}
           />
         </div>
-      )}
+      {/* AQI Analysis Report */}
+        {/* {showAnalysisReport && coordinates && date && (
+        <AQIAnalysisReport 
+          latitude={coordinates.latitude}
+          longitude={coordinates.longitude}
+          date={date}
+        /> */}
+      {/* )} */}
 
     </div>
   )

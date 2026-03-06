@@ -14,10 +14,10 @@ const AQIAnalysisReport = ({ latitude, longitude, date, analysisData = null }) =
       return
     }
 
-    // Otherwise, fetch from API if we have coordinates and date
-    if (latitude && longitude && date) {
-      fetchAnalysisData()
-    }
+    // Removed automatic API call - data will only be fetched when explicitly requested
+    // if (latitude && longitude && date) {
+    //   fetchAnalysisData()
+    // }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latitude, longitude, date, analysisData])
 

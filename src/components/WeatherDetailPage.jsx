@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { format, parseISO, isToday, startOfDay } from 'date-fns'
 import * as XLSX from 'xlsx'
 import { fetchHourlyWeatherData, calculateGeometryCenter } from '../services/api'
+import { transformRecordsByHeight } from '../utils/dataTransformers'
 import MonthlyWeatherCalendar from './MonthlyWeatherCalendar'
 import WeatherMetricsCards from './WeatherMetricsCards'
 import HourlyAQICards from './HourlyAQICards'
@@ -11,7 +12,7 @@ import './WeatherDetailPage.css'
 const WeatherDetailPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { geometry, startDate, endDate, currentDate, showAnalysis, weeklyMode, dailyMode } = location.state || {}
+  const { geometry, startDate, endDate, currentDate, showAnalysis, weeklyMode, dailyMode, selectedHeight } = location.state || {}
   
   const [selectedDate, setSelectedDate] = useState(currentDate || format(new Date(), 'yyyy-MM-dd'))
   const [hourlyData, setHourlyData] = useState([])
@@ -33,7 +34,7 @@ const WeatherDetailPage = () => {
     if (coordinates) {
       fetchHourlyData()
     }
-  }, [selectedDate, coordinates])
+  }, [selectedDate, coordinates, selectedHeight])
 
   const fetchHourlyData = async () => {
     if (!coordinates) return
@@ -47,7 +48,9 @@ const WeatherDetailPage = () => {
         coordinates.longitude,
         selectedDate
       )
-      setHourlyData(data.hourly_records || [])
+      // Transform records based on selected height
+      const transformedRecords = transformRecordsByHeight(data.hourly_records || [], selectedHeight)
+      setHourlyData(transformedRecords)
     } catch (err) {
       setError(err.message)
       console.error('Error fetching hourly weather data:', err)
@@ -183,7 +186,7 @@ const WeatherDetailPage = () => {
         <div className="error-message">
           <p>No location data available. Please go back and analyze an area first.</p>
           <button 
-            onClick={() => navigate('/dashboard', { state: { restoreAnalysis: showAnalysis || false } })} 
+            onClick={() => navigate('/dashboard', { state: { restoreAnalysis: showAnalysis || false, selectedHeight } })} 
             className="back-button"
           >
             Go Back to Dashboard
@@ -204,7 +207,8 @@ const WeatherDetailPage = () => {
                 geometry,
                 startDate,
                 endDate,
-                currentDate: currentDate || selectedDate
+                currentDate: currentDate || selectedDate,
+                selectedHeight // Pass selected height back
               } 
             })
           }} 
@@ -246,6 +250,7 @@ const WeatherDetailPage = () => {
             weeklyMode={weeklyMode}
             startDate={startDate}
             endDate={endDate}
+            selectedHeight={selectedHeight}
           />
         )
       )}

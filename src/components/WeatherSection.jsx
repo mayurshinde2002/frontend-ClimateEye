@@ -1,19 +1,22 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
+import { extractDataByHeight } from '../utils/dataTransformers'
 import './WeatherSection.css'
 
-const WeatherSection = ({ date, data, isLive = false, loading = false, geometry, startDate, endDate, onClick, viewMode }) => {
+const WeatherSection = ({ date, data, isLive = false, loading = false, geometry, startDate, endDate, onClick, viewMode, selectedHeight }) => {
   const navigate = useNavigate()
-  // Transform API data to component format
-  const weatherData = data ? {
-    temperature: data.temperature || data.daily?.temp_max || null,
-    feelsLike: data.feels_like || null,
-    condition: data.condition || 'Unknown',
-    humidity: data.humidity || data.daily?.humidity_max || null,
-    windSpeed: data.wind_speed || data.daily?.wind_speed_max || null,
-    uvIndex: data.uv_index || data.uv_index_max || data.daily?.uv_index_max || null,
-    icon: data.icon || 'cloud',
-    date: data.date || date
+  
+  // Transform API data based on selected height, then to component format
+  const transformedData = data ? extractDataByHeight(data, selectedHeight) : null
+  const weatherData = transformedData ? {
+    temperature: transformedData.temperature || transformedData.daily?.temp_max || null,
+    feelsLike: transformedData.feels_like || null,
+    condition: transformedData.condition || 'Unknown',
+    humidity: transformedData.humidity || transformedData.daily?.humidity_max || null,
+    windSpeed: transformedData.wind_speed || transformedData.daily?.wind_speed_max || null,
+    uvIndex: transformedData.uv_index || transformedData.uv_index_max || transformedData.daily?.uv_index_max || null,
+    icon: transformedData.icon || 'cloud',
+    date: transformedData.date || date
   } : null
 
   const getTemperatureColor = (temp) => {
@@ -74,7 +77,8 @@ const WeatherSection = ({ date, data, isLive = false, loading = false, geometry,
           currentDate: date,
           showAnalysis: true, // Indicate that analysis view should be restored
           weeklyMode: isWeeklyMode, // Pass weekly mode flag
-          dailyMode: isDailyMode // Pass daily mode flag
+          dailyMode: isDailyMode, // Pass daily mode flag
+          selectedHeight // Pass selected height
         }
       })
     }
