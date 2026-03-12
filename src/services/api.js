@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://aqi-weather-api.onrender.com/api'
+const API_BASE_URL = import.meta.env.DEV ? '/api' : 'https://climateye-apis.up.railway.app'
 
 /**
  * Calculate the center point (centroid) of a polygon geometry
