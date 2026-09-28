@@ -8,7 +8,7 @@ import MapComponent from './MapComponent'
 import WeatherSection from './WeatherSection'
 import AQISection from './AQISection'
 import LiveDashboardCards from './LiveDashboardCards'
-import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData } from '../services/api'
+import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData, fetchMethaneCatalog, fetchMethanePlumes, fetchMethaneTiles, boundsFromGeometry, resolveMethaneDateRange } from '../services/api'
 import './Dashboard.css'
 import './DatePicker.css'
 // HeightSelectionScreen.css was deleted - remove import if HeightSelectionScreen is not used
@@ -40,6 +40,9 @@ const Dashboard = () => {
   const [loadingTimeChart, setLoadingTimeChart] = useState(false)
   const [liveHourlyChartData, setLiveHourlyChartData] = useState([]) // Per-hour AQI for Live time series bar
   const [selectedHeight, setSelectedHeight] = useState(null) // '0-3meter' or '3meter-above' or null
+  const [methaneOverlay, setMethaneOverlay] = useState(null)
+  const [methaneLoading, setMethaneLoading] = useState(false)
+  const [methaneError, setMethaneError] = useState(null)
   
   // Refs to prevent multiple simultaneous API calls
   const isFetchingRef = useRef(false)
@@ -177,6 +180,71 @@ const Dashboard = () => {
     setDrawnGeometry(null)
     setUploadedKML(null)
     setIsDrawing(false)
+    setMethaneOverlay(null)
+    setMethaneError(null)
+  }
+
+  const handleClearMethane = () => {
+    setMethaneOverlay(null)
+    setMethaneError(null)
+  }
+
+  const handleAnalyseMethane = async () => {
+    if (!drawnGeometry && !uploadedKML) {
+      alert('Please draw an area or upload a KML file first')
+      return
+    }
+
+    setMethaneLoading(true)
+    setMethaneError(null)
+    setSidebarOpen(false)
+
+    try {
+      let geometry = drawnGeometry
+      if (!geometry && uploadedKML) {
+        geometry = parseKMLToGeometry(uploadedKML.content)
+      }
+      if (!geometry) {
+        throw new Error('Could not parse geometry')
+      }
+
+      const bounds = boundsFromGeometry(geometry)
+      const center = calculateGeometryCenter(geometry)
+      if (!bounds && !center) {
+        throw new Error('Could not calculate the selected area')
+      }
+
+      const dates = resolveMethaneDateRange(startDate, endDate)
+      const query = {
+        bounds,
+        latitude: center?.latitude,
+        longitude: center?.longitude,
+        startDate: dates.startDate,
+        endDate: dates.endDate
+      }
+
+      const [catalog, plumes, tiles] = await Promise.all([
+        fetchMethaneCatalog(),
+        fetchMethanePlumes(query),
+        fetchMethaneTiles(query)
+      ])
+
+      setMethaneOverlay({
+        tileUrl: tiles.tile_url || null,
+        features: plumes.geojson?.features || [],
+        legend: tiles.legend || catalog.legend || null,
+        attribution: tiles.attribution || plumes.attribution || catalog.attribution,
+        count: plumes.count ?? tiles.count ?? 0,
+        dateLabel: `${dates.startDate} to ${dates.endDate}`,
+        note: dates.note
+      })
+    } catch (err) {
+      setMethaneOverlay(null)
+      setMethaneError(err.message)
+      alert(`Methane analysis failed: ${err.message}`)
+    } finally {
+      setMethaneLoading(false)
+    }
   }
 
   const toggleView = () => {
@@ -1400,6 +1468,15 @@ const Dashboard = () => {
                 >
                   {loading ? 'LOADING...' : 'ANALYSE'}
                 </button>
+
+                <button
+                  className={`methane-button ${methaneOverlay ? 'active' : ''}`}
+                  onClick={handleAnalyseMethane}
+                  disabled={methaneLoading || loading}
+                >
+                  {methaneLoading ? 'LOADING METHANE...' : 'Analysis Methane'}
+                </button>
+                {methaneError && <p className="methane-sidebar-note">{methaneError}</p>}
               </div>
             </>
           ) : (
@@ -1461,6 +1538,9 @@ const Dashboard = () => {
                 isDrawing={isDrawing}
                 onGeometryComplete={handleGeometryComplete}
                 onCancelDrawing={handleCancelDrawing}
+                methaneOverlay={methaneOverlay}
+                methaneLoading={methaneLoading}
+                onClearMethane={handleClearMethane}
               />
             </div>
           ) : (

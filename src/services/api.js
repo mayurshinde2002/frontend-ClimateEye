@@ -289,3 +289,91 @@ export const fetchAQIAnalysis = async (latitude, longitude, date) => {
   }
 }
 
+const METHANE_ARCHIVE_START = '2022-08-10'
+const METHANE_ARCHIVE_END = '2026-06-09'
+
+const readApiJson = async (response) => {
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `Request failed (${response.status})`)
+  }
+  return data
+}
+
+/**
+ * Keep a date range inside the published methane archive.
+ * Ranges that do not overlap fall back to the latest 90 archive days.
+ */
+export const resolveMethaneDateRange = (startDate, endDate) => {
+  if (!startDate || !endDate || endDate < METHANE_ARCHIVE_START || startDate > METHANE_ARCHIVE_END) {
+    const end = new Date(`${METHANE_ARCHIVE_END}T00:00:00`)
+    const start = new Date(end)
+    start.setDate(start.getDate() - 90)
+    const startStr = start.toISOString().slice(0, 10)
+    return {
+      startDate: startStr < METHANE_ARCHIVE_START ? METHANE_ARCHIVE_START : startStr,
+      endDate: METHANE_ARCHIVE_END,
+      note: `Selected dates are outside the methane archive (${METHANE_ARCHIVE_START} to ${METHANE_ARCHIVE_END}). Showing the latest available period.`
+    }
+  }
+
+  const clampedStart = startDate < METHANE_ARCHIVE_START ? METHANE_ARCHIVE_START : startDate
+  const clampedEnd = endDate > METHANE_ARCHIVE_END ? METHANE_ARCHIVE_END : endDate
+  return {
+    startDate: clampedStart,
+    endDate: clampedEnd,
+    note: clampedStart !== startDate || clampedEnd !== endDate
+      ? `Methane archive covers ${METHANE_ARCHIVE_START} to ${METHANE_ARCHIVE_END}. Showing ${clampedStart} to ${clampedEnd}.`
+      : null
+  }
+}
+
+export const boundsFromGeometry = (geometry) => {
+  const ring = geometry?.coordinates?.[0]
+  if (!ring || ring.length === 0) return null
+
+  let minLng = Infinity
+  let minLat = Infinity
+  let maxLng = -Infinity
+  let maxLat = -Infinity
+
+  ring.forEach(([lng, lat]) => {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
+    minLng = Math.min(minLng, lng)
+    maxLng = Math.max(maxLng, lng)
+    minLat = Math.min(minLat, lat)
+    maxLat = Math.max(maxLat, lat)
+  })
+
+  if (!Number.isFinite(minLng)) return null
+  return `${minLng},${minLat},${maxLng},${maxLat}`
+}
+
+const methaneQuery = ({ bounds, latitude, longitude, startDate, endDate }) => {
+  const params = new URLSearchParams()
+  if (bounds) {
+    params.set('bounds', bounds)
+  } else {
+    params.set('latitude', String(latitude))
+    params.set('longitude', String(longitude))
+  }
+  if (startDate) params.set('start_date', startDate)
+  if (endDate) params.set('end_date', endDate)
+  return params.toString()
+}
+
+export const fetchMethaneCatalog = async () => {
+  const response = await fetch(`${API_BASE_URL}/methane`)
+  return readApiJson(response)
+}
+
+export const fetchMethanePlumes = async (query) => {
+  const response = await fetch(`${API_BASE_URL}/methane/plumes?${methaneQuery(query)}`)
+  return readApiJson(response)
+}
+
+export const fetchMethaneTiles = async (query) => {
+  const response = await fetch(`${API_BASE_URL}/methane/tiles?${methaneQuery(query)}`)
+  return readApiJson(response)
+}
+

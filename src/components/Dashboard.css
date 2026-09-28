@@ -477,6 +477,41 @@
   transform: translateY(0);
 }
 
+.methane-button {
+  background: transparent;
+  border: 1px solid #14b8a6;
+  border-radius: 8px;
+  padding: 14px 24px;
+  color: #14b8a6;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  letter-spacing: 0.4px;
+}
+
+.methane-button:hover:not(:disabled) {
+  background: rgba(20, 184, 166, 0.16);
+  box-shadow: 0 4px 12px rgba(20, 184, 166, 0.25);
+}
+
+.methane-button.active {
+  background: rgba(20, 184, 166, 0.22);
+  color: #ffffff;
+}
+
+.methane-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.methane-sidebar-note {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .main-content {
   flex: 1;
   padding: 0;

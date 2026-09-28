@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { MapContainer, TileLayer, Polygon, useMap } from 'react-leaflet'
+import React, { useEffect, useMemo, useState } from 'react'
+import { MapContainer, TileLayer, Polygon, useMap, CircleMarker, Popup } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import DrawAreaComponent from './DrawAreaComponent'
@@ -14,24 +14,58 @@ L.Icon.Default.mergeOptions({
 })
 
 // Component to handle map view changes and zoom to bounds
-const MapViewUpdater = ({ viewType, polygonCoordinates }) => {
+const MapViewUpdater = ({ polygonCoordinates, methanePoints }) => {
   const map = useMap()
   
   useEffect(() => {
-    if (polygonCoordinates && polygonCoordinates.length > 0) {
-      // Calculate bounds from polygon coordinates
-      const bounds = L.latLngBounds(polygonCoordinates)
-      map.fitBounds(bounds, { padding: [50, 50] })
+    const points = [
+      ...(polygonCoordinates || []),
+      ...(methanePoints || [])
+    ]
+    if (points.length > 0) {
+      const bounds = L.latLngBounds(points)
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 11 })
     }
-  }, [polygonCoordinates, map])
+  }, [polygonCoordinates, methanePoints, map])
   
   return null
 }
 
-const MapComponent = ({ viewType, drawnGeometry, uploadedKML, isDrawing, onGeometryComplete, onCancelDrawing }) => {
+const colorForEnhancement = (value, legend) => {
+  const palette = legend?.palette || ['#1b0c41', '#781c6d', '#ed6925', '#fcffa4']
+  const min = legend?.min ?? 0
+  const max = legend?.max ?? 300
+  const amount = Number(value)
+  if (!Number.isFinite(amount) || max <= min) return palette[Math.floor(palette.length / 2)]
+  const t = Math.max(0, Math.min(1, (amount - min) / (max - min)))
+  const index = Math.min(palette.length - 1, Math.round(t * (palette.length - 1)))
+  return palette[index]
+}
+
+const MapComponent = ({
+  viewType,
+  drawnGeometry,
+  uploadedKML,
+  isDrawing,
+  onGeometryComplete,
+  onCancelDrawing,
+  methaneOverlay,
+  methaneLoading,
+  onClearMethane
+}) => {
   const [mapCenter] = useState([20.5937, 78.9629]) // Default to India center
   const [mapZoom] = useState(5)
   const [polygonCoordinates, setPolygonCoordinates] = useState(null)
+
+  const methanePoints = useMemo(() => {
+    if (!methaneOverlay?.features?.length) return null
+    return methaneOverlay.features
+      .map((feature) => {
+        const [lng, lat] = feature.geometry?.coordinates || []
+        return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null
+      })
+      .filter(Boolean)
+  }, [methaneOverlay])
 
   useEffect(() => {
     if (drawnGeometry && drawnGeometry.coordinates) {
@@ -91,7 +125,7 @@ const MapComponent = ({ viewType, drawnGeometry, uploadedKML, isDrawing, onGeome
         style={{ height: '100%', width: '100%' }}
         className="leaflet-map"
       >
-        <MapViewUpdater viewType={viewType} polygonCoordinates={polygonCoordinates} />
+        <MapViewUpdater polygonCoordinates={polygonCoordinates} methanePoints={methanePoints} />
        
         {/* Satellite imagery base layer */}
         <TileLayer
@@ -127,7 +161,88 @@ const MapComponent = ({ viewType, drawnGeometry, uploadedKML, isDrawing, onGeome
             onCancel={onCancelDrawing}
           />
         )}
+
+        {methaneOverlay?.tileUrl && (
+          <TileLayer
+            key={methaneOverlay.tileUrl}
+            attribution={methaneOverlay.attribution || 'Google Earth Engine'}
+            url={methaneOverlay.tileUrl}
+            opacity={0.72}
+            zIndex={500}
+          />
+        )}
+
+        {methaneOverlay?.features?.map((feature) => {
+          const [lng, lat] = feature.geometry?.coordinates || []
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+          const props = feature.properties || {}
+          const fill = colorForEnhancement(props.methane_enhancement_ppm_m, methaneOverlay.legend)
+          const confidence = props.confidence || 'medium'
+          return (
+            <CircleMarker
+              key={feature.id || `${lat}-${lng}`}
+              center={[lat, lng]}
+              radius={confidence === 'high' ? 9 : 7}
+              pathOptions={{
+                color: confidence === 'high' ? '#fb9b06' : '#c4b5fd',
+                fillColor: fill,
+                fillOpacity: 0.9,
+                weight: 2
+              }}
+            >
+              <Popup>
+                <div className="methane-popup">
+                  <strong>Methane plume</strong>
+                  <div>Enhancement: {Number(props.methane_enhancement_ppm_m || 0).toFixed(1)} ppm·m</div>
+                  <div>Confidence: {confidence}</div>
+                  {props.observed_at && <div>Observed: {props.observed_at.replace('T', ' ').replace('Z', ' UTC')}</div>}
+                  {props.wind_speed_m_s != null && (
+                    <div>Wind: {Number(props.wind_speed_m_s).toFixed(1)} m/s at {props.wind_direction_deg}°</div>
+                  )}
+                  {props.plume_len_max > 0 && (
+                    <div>Plume length: {Math.round(props.plume_len_max)} m</div>
+                  )}
+                </div>
+              </Popup>
+            </CircleMarker>
+          )
+        })}
       </MapContainer>
+
+      {(methaneLoading || methaneOverlay) && (
+        <div className="methane-legend">
+          <div className="methane-legend-header">
+            <span>Methane analysis</span>
+            {onClearMethane && (
+              <button type="button" className="methane-legend-close" onClick={onClearMethane}>
+                Clear
+              </button>
+            )}
+          </div>
+          {methaneLoading ? (
+            <p className="methane-legend-note">Loading plumes and tiles…</p>
+          ) : (
+            <>
+              <div
+                className="methane-legend-bar"
+                style={{
+                  background: `linear-gradient(to right, ${(methaneOverlay.legend?.palette || ['#1b0c41', '#fcffa4']).join(',')})`
+                }}
+              />
+              <div className="methane-legend-scale">
+                <span>{methaneOverlay.legend?.min ?? 0}</span>
+                <span>{methaneOverlay.legend?.title || 'Methane'} ({methaneOverlay.legend?.unit || 'ppm-m'})</span>
+                <span>{methaneOverlay.legend?.max ?? 300}</span>
+              </div>
+              <p className="methane-legend-note">
+                {methaneOverlay.count ?? methaneOverlay.features?.length ?? 0} plumes
+                {methaneOverlay.dateLabel ? ` · ${methaneOverlay.dateLabel}` : ''}
+              </p>
+              {methaneOverlay.note && <p className="methane-legend-note">{methaneOverlay.note}</p>}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
