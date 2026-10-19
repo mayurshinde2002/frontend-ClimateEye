@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react'
 import { transformRecordsByHeight } from '../utils/dataTransformers'
 import { useAuth } from '../context/AuthContext'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -11,7 +11,9 @@ import LiveDashboardCards from './LiveDashboardCards'
 import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData, fetchMethaneCatalog, fetchMethanePlumes, fetchMethaneTiles, boundsFromGeometry, resolveMethaneDateRange } from '../services/api'
 import './Dashboard.css'
 import './DatePicker.css'
-// HeightSelectionScreen.css was deleted - remove import if HeightSelectionScreen is not used
+import './Building3DView.css'
+
+const Building3DView = lazy(() => import('./Building3DView'))
 
 const Dashboard = () => {
   const { logout } = useAuth()
@@ -23,6 +25,9 @@ const Dashboard = () => {
   const [startDate, setStartDate] = useState(format(oneWeekAgo, 'yyyy-MM-dd'))
   const [endDate, setEndDate] = useState(format(today, 'yyyy-MM-dd'))
   const [viewType, setViewType] = useState('map') // 'map' or 'satellite'
+  const [showWind, setShowWind] = useState(false)
+  const [showTemperature, setShowTemperature] = useState(false)
+  const [showRain, setShowRain] = useState(false)
   const [isDrawing, setIsDrawing] = useState(false)
   const [drawnGeometry, setDrawnGeometry] = useState(null)
   const [uploadedKML, setUploadedKML] = useState(null)
@@ -43,6 +48,8 @@ const Dashboard = () => {
   const [methaneOverlay, setMethaneOverlay] = useState(null)
   const [methaneLoading, setMethaneLoading] = useState(false)
   const [methaneError, setMethaneError] = useState(null)
+  const [show3DView, setShow3DView] = useState(false)
+  const [mapView, setMapView] = useState(null)
   
   // Refs to prevent multiple simultaneous API calls
   const isFetchingRef = useRef(false)
@@ -141,6 +148,7 @@ const Dashboard = () => {
   }
 
   const handleDrawArea = () => {
+    setShow3DView(false)
     setIsDrawing(true)
     setUploadedKML(null) // Clear KML when drawing
   }
@@ -182,6 +190,7 @@ const Dashboard = () => {
     setIsDrawing(false)
     setMethaneOverlay(null)
     setMethaneError(null)
+    setShow3DView(false)
   }
 
   const handleClearMethane = () => {
@@ -390,6 +399,23 @@ const Dashboard = () => {
       console.error('Error parsing KML:', error)
     }
     return null
+  }
+
+  const selectedGeometry = useMemo(
+    () => drawnGeometry || (uploadedKML ? parseKMLToGeometry(uploadedKML.content) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [drawnGeometry, uploadedKML]
+  )
+
+  const handleMapView = useCallback((view) => {
+    setMapView(view)
+  }, [])
+
+  const handleOpen3DView = () => {
+    // Drawn area → building focus; otherwise tilt the current map view into 3D.
+    if (!selectedGeometry && !mapView) return
+    setShow3DView(true)
+    setSidebarOpen(false)
   }
 
   // Helper function to aggregate hourly data
@@ -1290,7 +1316,7 @@ const Dashboard = () => {
   // }, [viewMode])
 
   return (
-    <div className="dashboard">
+    <div className={`dashboard${show3DView && !showAnalysis ? ' dashboard--3d' : ''}`}>
       <header className="dashboard-header">
         <div className="header-left">
           <div className="logo-container">
@@ -1477,6 +1503,15 @@ const Dashboard = () => {
                   {methaneLoading ? 'LOADING METHANE...' : 'Analysis Methane'}
                 </button>
                 {methaneError && <p className="methane-sidebar-note">{methaneError}</p>}
+
+                <button
+                  className={`methane-button ${show3DView ? 'active' : ''}`}
+                  onClick={handleOpen3DView}
+                  disabled={!selectedGeometry && !mapView}
+                  title={selectedGeometry ? 'Show 3D buildings for the drawn area' : 'Show this map area in 3D'}
+                >
+                  3D View
+                </button>
               </div>
             </>
           ) : (
@@ -1498,9 +1533,64 @@ const Dashboard = () => {
         </aside>
 
         <main className="main-content">
-          {!showAnalysis ? (
+          {!showAnalysis && show3DView && (selectedGeometry || mapView) ? (
+            <Suspense fallback={<div className="building-3d-loading">Loading 3D view…</div>}>
+              <Building3DView
+                geometry={selectedGeometry}
+                view={mapView}
+                methaneOverlay={methaneOverlay}
+                onBack={() => setShow3DView(false)}
+              />
+            </Suspense>
+          ) : !showAnalysis ? (
             <div className="map-wrapper">
               <div className="view-toggle-container">
+                {/* <button
+                  className="view-toggle-button view-3d-button"
+                  onClick={handleOpen3DView}
+                  disabled={!selectedGeometry && !mapView}
+                  title={selectedGeometry ? 'Show 3D buildings for the drawn area' : 'Show this map area in 3D'}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"></path>
+                    <path d="M12 22V12"></path>
+                    <path d="M21 7l-9 5-9-5"></path>
+                  </svg>
+                  <span>3D</span>
+                </button>
+                <button
+                  className={`view-toggle-button ${showTemperature ? 'active' : ''}`}
+                  onClick={() => setShowTemperature((on) => !on)}
+                  title={showTemperature ? 'Hide temperature' : 'Show temperature on the map'}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
+                  </svg>
+                  <span>Temp</span>
+                </button>
+                <button
+                  className={`view-toggle-button ${showRain ? 'active' : ''}`}
+                  onClick={() => setShowRain((on) => !on)}
+                  title={showRain ? 'Hide rain' : 'Show rain on the map'}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M16 13V21M8 13V21M12 15V23"></path>
+                    <path d="M20 10.5a5.5 5.5 0 0 0-10.2-2.8A4.5 4.5 0 1 0 6.5 16H19a3.5 3.5 0 0 0 1-5.5z"></path>
+                  </svg>
+                  <span>Rain</span>
+                </button>
+                <button
+                  className={`view-toggle-button ${showWind ? 'active' : ''}`}
+                  onClick={() => setShowWind((on) => !on)}
+                  title={showWind ? 'Hide wind' : 'Show wind on the map'}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 8h11a3 3 0 1 0-3-3"></path>
+                    <path d="M3 12h15a3 3 0 1 1-3 3"></path>
+                    <path d="M3 16h8"></path>
+                  </svg>
+                  <span>Wind</span>
+                </button> */}
                 <button 
                   className={`view-toggle-button ${viewType === 'map' ? 'active' : ''}`}
                   onClick={toggleView}
@@ -1533,6 +1623,9 @@ const Dashboard = () => {
               </div>
               <MapComponent 
                 viewType={viewType}
+                showWind={showWind}
+                showTemperature={showTemperature}
+                showRain={showRain}
                 drawnGeometry={drawnGeometry}
                 uploadedKML={uploadedKML}
                 isDrawing={isDrawing}
@@ -1541,6 +1634,7 @@ const Dashboard = () => {
                 methaneOverlay={methaneOverlay}
                 methaneLoading={methaneLoading}
                 onClearMethane={handleClearMethane}
+                onMapView={handleMapView}
               />
             </div>
           ) : (

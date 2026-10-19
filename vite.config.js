@@ -11,6 +11,12 @@ export default defineConfig({
         target: 'https://climateye-apis.up.railway.app',
         changeOrigin: true,
         secure: true
+      },
+      '/open-meteo': {
+        target: 'https://api.open-meteo.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/open-meteo/, '')
       }
     }
   }

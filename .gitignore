@@ -10,6 +10,9 @@ node_modules
 /build
 /dist
 
+# India construction tiles are hosted on R2; a local copy is only for testing
+/public/data/india-construction.*
+
 # Misc
 .DS_Store
 .env.local

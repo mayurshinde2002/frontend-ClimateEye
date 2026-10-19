@@ -520,6 +520,20 @@
   position: relative;
 }
 
+/* 3D mode: expand the map to the full content width */
+.dashboard--3d .sidebar {
+  display: none;
+}
+
+.dashboard--3d .sidebar-toggle {
+  display: none;
+}
+
+.dashboard--3d .main-content {
+  width: 100%;
+  flex: 1 1 100%;
+}
+
 .map-wrapper {
   width: 100%;
   height: 100%;
@@ -998,6 +1012,15 @@
   top: 16px;
   right: 16px;
   z-index: 1000;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.view-3d-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .view-toggle-button {

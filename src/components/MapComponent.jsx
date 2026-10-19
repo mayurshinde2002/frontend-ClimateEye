@@ -1,8 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { MapContainer, TileLayer, Polygon, useMap, CircleMarker, Popup } from 'react-leaflet'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { MapContainer, TileLayer, Polygon, GeoJSON, useMap, Circle, CircleMarker, Marker, Popup } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import DrawAreaComponent from './DrawAreaComponent'
+import PlaceSearch from './PlaceSearch'
+import { fetchAreaConstruction } from '../services/areaConstruction'
+import { CONSTRUCTION_COLOR, describeConstruction } from '../services/constructionTiles'
+import { calculateGeometryCenter, fetchHourlyWeatherData } from '../services/api'
+import RegionalWindMap from './RegionalWindMap'
+import TemperatureFieldMap from './TemperatureFieldMap'
+import TemperaturePanel from './TemperaturePanel'
+import RainFieldMap from './RainFieldMap'
+import LocationRadiusOverlay from './LocationRadiusOverlay'
 import './MapComponent.css'
 
 // Fix for default marker icons in Leaflet
@@ -31,6 +40,220 @@ const MapViewUpdater = ({ polygonCoordinates, methanePoints }) => {
   return null
 }
 
+const SearchedPlaceMarker = ({ place }) => {
+  const markerRef = useRef(null)
+
+  useEffect(() => {
+    markerRef.current?.openPopup()
+  }, [place])
+
+  return (
+    <Marker position={[place.lat, place.lng]} ref={markerRef}>
+      <Popup>
+        <strong>{place.name}</strong>
+        <div>{place.type}{place.context ? ` · ${place.context}` : ''}</div>
+      </Popup>
+    </Marker>
+  )
+}
+
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`)
+
+const WIND_CARDINALS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+
+const todayDate = () => {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
+const finiteOrNull = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+const cardinalFromDegrees = (degrees) => {
+  const value = finiteOrNull(degrees)
+  if (value === null) return null
+  const normalized = ((value % 360) + 360) % 360
+  return WIND_CARDINALS[Math.floor((normalized + 11.25) / 22.5) % 16]
+}
+
+const currentWindReading = (records) => {
+  const now = new Date()
+  const hours = (records || [])
+    .map((record) => ({
+      speed: finiteOrNull(record.wind_speed),
+      direction: finiteOrNull(record.wind_direction),
+      cardinal: record.wind_direction_cardinal,
+      gusts: finiteOrNull(record.wind_gusts),
+      predicted: record.data_source === 'Prediction',
+      time: new Date(String(record.date || '').replace(' ', 'T'))
+    }))
+    .filter((record) => !Number.isNaN(record.time.getTime()) && record.time <= now)
+    .sort((a, b) => a.time - b.time)
+  return hours.length ? hours[hours.length - 1] : null
+}
+
+const MapPanes = () => {
+  const map = useMap()
+  const ensurePane = (name, zIndex) => {
+    const pane = map.getPane(name) || map.createPane(name)
+    pane.style.zIndex = String(zIndex)
+    pane.style.pointerEvents = 'none'
+  }
+  ensurePane('satelliteBase', 100)
+  ensurePane('weatherField', 450)
+  ensurePane('countryBorders', 520)
+  ensurePane('placeLabels', 640)
+  return null
+}
+
+// Right-click can leave the map looking "stuck". Recover without touching Leaflet internals.
+const MapInteractionFix = () => {
+  const map = useMap()
+
+  useEffect(() => {
+    let alive = true
+    const container = map.getContainer()
+
+    const mapAlive = () => alive && map.getContainer() && map._loaded !== false
+
+    const releaseStuckDrag = () => {
+      if (!mapAlive()) return
+      try {
+        L.DomUtil.removeClass(container, 'leaflet-dragging')
+        L.DomUtil.removeClass(document.body, 'leaflet-dragging')
+        if (map.dragging && !map.dragging.enabled()) map.dragging.enable()
+        if (!container.classList.contains('leaflet-crosshair')) {
+          container.style.cursor = ''
+        }
+      } catch {
+        // Map may already be unmounting.
+      }
+    }
+
+    const onContextMenu = (event) => {
+      L.DomEvent.preventDefault(event)
+      releaseStuckDrag()
+    }
+
+    const onMouseUp = (event) => {
+      if (event.button === 2) releaseStuckDrag()
+    }
+
+    map.on('contextmenu', onContextMenu)
+    document.addEventListener('mouseup', onMouseUp, true)
+    window.addEventListener('blur', releaseStuckDrag)
+
+    return () => {
+      alive = false
+      document.removeEventListener('mouseup', onMouseUp, true)
+      window.removeEventListener('blur', releaseStuckDrag)
+      try {
+        if (map.getContainer()) map.off('contextmenu', onContextMenu)
+      } catch {
+        // Ignore teardown races while MapContainer unmounts.
+      }
+    }
+  }, [map])
+
+  return null
+}
+
+// Higher-detail Natural Earth borders (coastlines + country lines)
+const COUNTRY_BORDERS_URL =
+  'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson'
+
+const CountryBorders = () => {
+  const [data, setData] = useState(null)
+  const map = useMap()
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(COUNTRY_BORDERS_URL)
+      .then((response) => {
+        if (!response.ok) throw new Error('Failed to load country borders')
+        return response.json()
+      })
+      .then((geojson) => {
+        if (!cancelled) setData(geojson)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (!data) return undefined
+    const layer = L.geoJSON(data, {
+      pane: 'countryBorders',
+      interactive: false,
+      style: () => ({
+        color: '#0a0a0a',
+        weight: map.getZoom() >= 6 ? 1.15 : 0.9,
+        opacity: 0.92,
+        fill: false,
+        fillOpacity: 0,
+        lineJoin: 'round',
+        lineCap: 'round'
+      })
+    })
+    layer.addTo(map)
+
+    const syncWeight = () => {
+      const weight = map.getZoom() >= 6 ? 1.15 : 0.9
+      layer.setStyle({ weight })
+    }
+    map.on('zoomend', syncWeight)
+
+    return () => {
+      map.off('zoomend', syncWeight)
+      map.removeLayer(layer)
+    }
+  }, [data, map])
+
+  return null
+}
+
+const MapCenterWatcher = ({ onCenter, onView }) => {
+  const map = useMap()
+
+  useEffect(() => {
+    let timer = null
+    const publish = () => {
+      const center = map.getCenter()
+      const bounds = map.getBounds()
+      const view = {
+        latitude: center.lat,
+        longitude: center.lng,
+        zoom: map.getZoom(),
+        bounds: {
+          south: bounds.getSouth(),
+          west: bounds.getWest(),
+          north: bounds.getNorth(),
+          east: bounds.getEast()
+        }
+      }
+      onCenter(view)
+      onView?.(view)
+    }
+    publish()
+    const update = () => {
+      clearTimeout(timer)
+      timer = setTimeout(publish, 200)
+    }
+    map.on('moveend', update)
+    return () => {
+      clearTimeout(timer)
+      map.off('moveend', update)
+    }
+  }, [map, onCenter, onView])
+
+  return null
+}
+
 const colorForEnhancement = (value, legend) => {
   const palette = legend?.palette || ['#1b0c41', '#781c6d', '#ed6925', '#fcffa4']
   const min = legend?.min ?? 0
@@ -44,6 +267,9 @@ const colorForEnhancement = (value, legend) => {
 
 const MapComponent = ({
   viewType,
+  showWind = false,
+  showTemperature = false,
+  showRain = false,
   drawnGeometry,
   uploadedKML,
   isDrawing,
@@ -51,11 +277,113 @@ const MapComponent = ({
   onCancelDrawing,
   methaneOverlay,
   methaneLoading,
-  onClearMethane
+  onClearMethane,
+  onMapView
 }) => {
   const [mapCenter] = useState([20.5937, 78.9629]) // Default to India center
   const [mapZoom] = useState(5)
   const [polygonCoordinates, setPolygonCoordinates] = useState(null)
+  const [map, setMap] = useState(null)
+  const [searchedPlace, setSearchedPlace] = useState(null)
+  const [areaConstruction, setAreaConstruction] = useState(null)
+  const [userLocation, setUserLocation] = useState(null)
+  const [selectedRadius, setSelectedRadius] = useState(500)
+  const [locating, setLocating] = useState(false)
+  const [locationError, setLocationError] = useState(null)
+  const [viewCenter, setViewCenter] = useState({ latitude: mapCenter[0], longitude: mapCenter[1] })
+  const [windReading, setWindReading] = useState(null)
+  const [windLoading, setWindLoading] = useState(false)
+  const [windError, setWindError] = useState(null)
+
+  const handleViewCenter = useMemo(() => (center) => setViewCenter(center), [])
+
+  const windPoint = useMemo(() => {
+    if (userLocation) return { latitude: userLocation.lat, longitude: userLocation.lng }
+    if (searchedPlace) return { latitude: searchedPlace.lat, longitude: searchedPlace.lng }
+    if (drawnGeometry) {
+      const center = calculateGeometryCenter(drawnGeometry)
+      if (center) return center
+    }
+    return viewCenter
+  }, [userLocation, searchedPlace, drawnGeometry, viewCenter])
+
+  const windLatitude = Number(windPoint.latitude.toFixed(2))
+  const windLongitude = Number(windPoint.longitude.toFixed(2))
+
+  useEffect(() => {
+    if (!showWind || !Number.isFinite(windLatitude) || !Number.isFinite(windLongitude)) return
+    let cancelled = false
+    setWindLoading(true)
+    setWindError(null)
+    fetchHourlyWeatherData(windLatitude, windLongitude, todayDate())
+      .then((data) => {
+        if (!cancelled) setWindReading(currentWindReading(data?.hourly_records))
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setWindReading(null)
+          setWindError(err.message || 'Wind data could not be loaded')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWindLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [showWind, windLatitude, windLongitude])
+
+  const windReadable = windReading && windReading.speed !== null && windReading.direction !== null
+  const windToward = windReadable ? (windReading.direction + 180) % 360 : null
+
+  const locateUser = () => {
+    if (!navigator.geolocation) {
+      setLocationError('This browser cannot read your location.')
+      return
+    }
+    setLocating(true)
+    setLocationError(null)
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const next = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          accuracy: position.coords.accuracy
+        }
+        setUserLocation(next)
+        setSelectedRadius(500)
+        setLocating(false)
+        if (map) {
+          const circle = L.circle([next.lat, next.lng], { radius: 1000 })
+          map.fitBounds(circle.getBounds(), { padding: [48, 48], maxZoom: 17, animate: true })
+        }
+      },
+      (err) => {
+        setLocating(false)
+        const messages = {
+          1: 'Location permission was blocked. Allow location for this site and try again.',
+          2: 'Your location could not be found.',
+          3: 'Finding your location took too long. Try again.'
+        }
+        setLocationError(messages[err.code] || 'Your location could not be found.')
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+    )
+  }
+
+  useEffect(() => {
+    if (!drawnGeometry) {
+      setAreaConstruction(null)
+      return
+    }
+    const controller = new AbortController()
+    setAreaConstruction(null)
+    fetchAreaConstruction(drawnGeometry, { signal: controller.signal })
+      .then((data) => { if (!controller.signal.aborted) setAreaConstruction(data) })
+      .catch((err) => {
+        if (err.name === 'AbortError') return
+        setAreaConstruction({ features: [], note: err.message })
+      })
+    return () => controller.abort()
+  }, [drawnGeometry])
 
   const methanePoints = useMemo(() => {
     if (!methaneOverlay?.features?.length) return null
@@ -107,10 +435,6 @@ const MapComponent = ({
     }
   }
 
-  // Light theme tile layer (matching UI light colors)
-  const lightTileLayer = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-  
-  // Satellite tile layer (using Esri World Imagery)
   const satelliteTileLayer = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
   
   // Label layer overlay for location names only (shows place names, cities, states, countries)
@@ -120,27 +444,64 @@ const MapComponent = ({
   return (
     <div className="map-container">
       <MapContainer
+        ref={setMap}
         center={mapCenter}
         zoom={mapZoom}
         style={{ height: '100%', width: '100%' }}
         className="leaflet-map"
       >
+        <MapPanes />
+        <MapInteractionFix />
         <MapViewUpdater polygonCoordinates={polygonCoordinates} methanePoints={methanePoints} />
+        <MapCenterWatcher onCenter={handleViewCenter} onView={onMapView} />
+
+        {showWind && <RegionalWindMap />}
+        {showTemperature && <TemperatureFieldMap />}
+        {showRain && <RainFieldMap />}
+
+        {searchedPlace && (
+          <SearchedPlaceMarker place={searchedPlace} />
+        )}
+
+        {userLocation && (
+          <>
+            <Circle
+              center={[userLocation.lat, userLocation.lng]}
+              radius={Math.max(userLocation.accuracy || 0, 20)}
+              pathOptions={{ color: '#93c5fd', fillColor: '#93c5fd', fillOpacity: 0.2, weight: 1 }}
+            />
+            <CircleMarker
+              center={[userLocation.lat, userLocation.lng]}
+              radius={8}
+              pathOptions={{ color: '#ffffff', weight: 3, fillColor: '#2563eb', fillOpacity: 1 }}
+            >
+              <Popup>
+                <strong>Your location</strong>
+                {userLocation.accuracy > 0 && <div>Accurate to about {Math.round(userLocation.accuracy)} m</div>}
+              </Popup>
+            </CircleMarker>
+            <LocationRadiusOverlay
+              userLocation={userLocation}
+              selectedRadius={selectedRadius}
+              onSelectRadius={setSelectedRadius}
+            />
+          </>
+        )}
        
-        {/* Satellite imagery base layer */}
         <TileLayer
           attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
           url={satelliteTileLayer}
+          pane="satelliteBase"
         />
-        
-        {/* Label layer overlay for location names - shows place names, cities, states, countries */}
-        {/* Using World Boundaries and Places - provides clean labels (location names only) without road clutter */}
+
         <TileLayer
           attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
           url={labelTileLayer}
+          pane="placeLabels"
           opacity={1}
-          zIndex={1000}
         />
+
+        <CountryBorders />
        
         {polygonCoordinates && (
           <Polygon
@@ -148,8 +509,28 @@ const MapComponent = ({
             pathOptions={{
               color: '#14b8a6',
               fillColor: '#14b8a6',
-              fillOpacity: 0.25,
+              fillOpacity: 0.12,
               weight: 2
+            }}
+          />
+        )}
+
+        {areaConstruction?.features?.length > 0 && (
+          <GeoJSON
+            key={`${areaConstruction.features.length}:${areaConstruction.features[0]?.properties?.id || ''}`}
+            data={{ type: 'FeatureCollection', features: areaConstruction.features }}
+            style={(feature) => (
+              feature.properties.kind === 'site'
+                ? { color: CONSTRUCTION_COLOR, weight: 2, dashArray: '6 4', fillColor: CONSTRUCTION_COLOR, fillOpacity: 0.28 }
+                : { color: '#b45309', weight: 2, fillColor: CONSTRUCTION_COLOR, fillOpacity: 0.8 }
+            )}
+            onEachFeature={(feature, layer) => {
+              const described = describeConstruction(feature.properties)
+              layer.bindPopup(
+                `<strong>${escapeHtml(described.title)}</strong>` +
+                (described.status ? `<div>${escapeHtml(described.status)}</div>` : '') +
+                described.lines.map(line => `<div>${escapeHtml(line)}</div>`).join('')
+              )
             }}
           />
         )}
@@ -208,6 +589,65 @@ const MapComponent = ({
           )
         })}
       </MapContainer>
+
+      {drawnGeometry && (
+        <div className="construction-area-note">
+          <span className="construction-area-swatch" />
+          {areaConstruction
+            ? `${areaConstruction.features.length} under construction`
+            : 'Looking for under-construction buildings…'}
+          {areaConstruction?.note && <div className="construction-area-detail">{areaConstruction.note}</div>}
+        </div>
+      )}
+
+      {showTemperature && (
+        <TemperaturePanel
+          latitude={Math.round(windLatitude * 2) / 2}
+          longitude={Math.round(windLongitude * 2) / 2}
+          date={todayDate()}
+        />
+      )}
+
+      {showWind && <div className="wind-map-card">
+        <div className="wind-map-card-title">Wind</div>
+        {windLoading && <div className="wind-map-card-value">Loading…</div>}
+        {!windLoading && windError && <div className="wind-map-card-value">{windError}</div>}
+        {!windLoading && !windError && windReadable && (
+          <>
+            <div className="wind-map-card-value">{windReading.speed.toFixed(1)} km/h</div>
+            <div className="wind-map-card-detail">
+              From {windReading.cardinal || cardinalFromDegrees(windReading.direction)} ({Math.round(windReading.direction)}°)
+            </div>
+            <div className="wind-map-card-detail">
+              Toward {cardinalFromDegrees(windToward)} ({Math.round(windToward)}°)
+            </div>
+          </>
+        )}
+        {!windLoading && !windError && !windReadable && (
+          <div className="wind-map-card-value">No wind data</div>
+        )}
+      </div>}
+
+      <button
+        type="button"
+        className={`locate-button${locating ? ' locating' : ''}`}
+        onClick={locateUser}
+        disabled={locating}
+        title="Show my location"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
+        </svg>
+      </button>
+      {locationError && <div className="locate-error">{locationError}</div>}
+
+      <PlaceSearch
+        map={map}
+        selectedPlace={searchedPlace}
+        onSelect={setSearchedPlace}
+        onClear={() => setSearchedPlace(null)}
+      />
 
       {(methaneLoading || methaneOverlay) && (
         <div className="methane-legend">

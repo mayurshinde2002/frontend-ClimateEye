@@ -9,31 +9,42 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
   const markersRef = useRef([])
   const polylineRef = useRef(null)
   const [isActive, setIsActive] = useState(false)
+  const [pointCount, setPointCount] = useState(0)
   const handlersRef = useRef({ click: null, dblclick: null })
 
+  const restoreMapControls = useCallback(() => {
+    try {
+      if (!map?.getContainer?.()) return
+      map.doubleClickZoom?.enable()
+      map.boxZoom?.enable()
+      map.dragging?.enable()
+      map.scrollWheelZoom?.enable()
+      map.getContainer().style.cursor = ''
+      L.DomUtil.removeClass(map.getContainer(), 'leaflet-dragging')
+      L.DomUtil.removeClass(document.body, 'leaflet-dragging')
+    } catch {
+      // Map may already be unmounting.
+    }
+  }, [map])
+
   const cleanup = useCallback(() => {
-    markersRef.current.forEach(marker => map.removeLayer(marker))
+    markersRef.current.forEach((marker) => map.removeLayer(marker))
     markersRef.current = []
-    
+
     if (polylineRef.current) {
       map.removeLayer(polylineRef.current)
       polylineRef.current = null
     }
-    
+
     pointsRef.current = []
+    setPointCount(0)
   }, [map])
 
   const finishDrawing = useCallback(() => {
-    if (pointsRef.current.length < 3) {
-      return
-    }
+    if (pointsRef.current.length < 3) return
 
-    // Close the polygon
     const closedPoints = [...pointsRef.current, pointsRef.current[0]]
-    
-    // Convert to GeoJSON format [lng, lat]
     const coordinates = closedPoints.map(([lat, lng]) => [lng, lat])
-    
     const geometry = {
       type: 'Polygon',
       coordinates: [coordinates]
@@ -41,75 +52,95 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
 
     onGeometryComplete(geometry)
     cleanup()
-  }, [onGeometryComplete, cleanup])
+    restoreMapControls()
+  }, [onGeometryComplete, cleanup, restoreMapControls])
 
   useEffect(() => {
-    if (isDrawing) {
-      setIsActive(true)
-      map.getContainer().style.cursor = 'crosshair'
-      pointsRef.current = []
-      markersRef.current = []
-      
-      const handleMapClick = (e) => {
-        const { lat, lng } = e.latlng
-        pointsRef.current.push([lat, lng])
-
-        // Add marker
-        const marker = L.marker([lat, lng], {
-          icon: L.divIcon({
-            className: 'draw-marker',
-            html: '<div class="marker-dot"></div>',
-            iconSize: [12, 12],
-            iconAnchor: [6, 6]
-          })
-        }).addTo(map)
-        
-        markersRef.current.push(marker)
-
-        // Update polyline
-        if (polylineRef.current) {
-          map.removeLayer(polylineRef.current)
-        }
-
-        if (pointsRef.current.length > 1) {
-          polylineRef.current = L.polyline(pointsRef.current, {
-            color: '#14b8a6',
-            weight: 2,
-            dashArray: '5, 5',
-            opacity: 0.7
-          }).addTo(map)
-        }
-      }
-
-      const handleDoubleClick = (e) => {
-        e.originalEvent.preventDefault()
-        if (pointsRef.current.length >= 3) {
-          finishDrawing()
-        }
-      }
-
-      handlersRef.current.click = handleMapClick
-      handlersRef.current.dblclick = handleDoubleClick
-      
-      map.on('click', handleMapClick)
-      map.on('dblclick', handleDoubleClick)
-    } else {
+    if (!isDrawing) {
       setIsActive(false)
-      map.getContainer().style.cursor = ''
+      restoreMapControls()
       cleanup()
+      return undefined
     }
+
+    setIsActive(true)
+    map.getContainer().style.cursor = 'crosshair'
+    // Double-click finishes the polygon — don't also zoom the map.
+    map.doubleClickZoom?.disable()
+    map.boxZoom?.disable()
+    pointsRef.current = []
+    markersRef.current = []
+    setPointCount(0)
+
+    const handleMapClick = (e) => {
+      const { lat, lng } = e.latlng
+      pointsRef.current.push([lat, lng])
+      setPointCount(pointsRef.current.length)
+
+      const marker = L.marker([lat, lng], {
+        icon: L.divIcon({
+          className: 'draw-marker',
+          html: '<div class="marker-dot"></div>',
+          iconSize: [12, 12],
+          iconAnchor: [6, 6]
+        }),
+        interactive: false,
+        keyboard: false
+      }).addTo(map)
+
+      markersRef.current.push(marker)
+
+      if (polylineRef.current) {
+        map.removeLayer(polylineRef.current)
+      }
+
+      if (pointsRef.current.length > 1) {
+        polylineRef.current = L.polyline(pointsRef.current, {
+          color: '#14b8a6',
+          weight: 2,
+          dashArray: '5, 5',
+          opacity: 0.7,
+          interactive: false
+        }).addTo(map)
+      }
+    }
+
+    const handleDoubleClick = (e) => {
+      L.DomEvent.preventDefault(e)
+      L.DomEvent.stop(e)
+      if (pointsRef.current.length >= 3) {
+        finishDrawing()
+      }
+    }
+
+    const handleContextMenu = (e) => {
+      L.DomEvent.preventDefault(e)
+      L.DomEvent.stop(e)
+    }
+
+    handlersRef.current.click = handleMapClick
+    handlersRef.current.dblclick = handleDoubleClick
+
+    map.on('click', handleMapClick)
+    map.on('dblclick', handleDoubleClick)
+    map.on('contextmenu', handleContextMenu)
 
     return () => {
-      map.getContainer().style.cursor = ''
-      if (handlersRef.current.click) {
-        map.off('click', handlersRef.current.click)
+      try {
+        if (map?.getContainer?.()) {
+          map.off('click', handleMapClick)
+          map.off('dblclick', handleDoubleClick)
+          map.off('contextmenu', handleContextMenu)
+        }
+      } catch {
+        // Ignore teardown races while MapContainer unmounts.
       }
-      if (handlersRef.current.dblclick) {
-        map.off('dblclick', handlersRef.current.dblclick)
-      }
+      handlersRef.current.click = null
+      handlersRef.current.dblclick = null
       cleanup()
+      restoreMapControls()
     }
-  }, [isDrawing, map, cleanup, finishDrawing])
+  }, [isDrawing, map, cleanup, finishDrawing, restoreMapControls])
 
   if (!isActive) {
     return null
@@ -122,17 +153,20 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
         <p>Double-click or click "Finish" to complete</p>
       </div>
       <div className="draw-actions">
-        <button 
+        <button
           className="draw-button finish-button"
           onClick={finishDrawing}
-          disabled={pointsRef.current.length < 3}
+          disabled={pointCount < 3}
+          type="button"
         >
           Finish Drawing
         </button>
-        <button 
+        <button
           className="draw-button cancel-button"
+          type="button"
           onClick={() => {
             cleanup()
+            restoreMapControls()
             onCancel()
           }}
         >
@@ -144,4 +178,3 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
 }
 
 export default DrawAreaComponent
-

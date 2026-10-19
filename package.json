@@ -6,9 +6,12 @@
   "dependencies": {
     "date-fns": "^2.30.0",
     "leaflet": "^1.9.4",
+    "maplibre-gl": "^4.7.1",
+    "pmtiles": "^4.5.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-leaflet": "^4.2.1",
+    "react-map-gl": "^7.1.9",
     "react-router-dom": "^6.20.0",
     "recharts": "^3.5.0",
     "xlsx": "^0.18.5"
@@ -19,7 +22,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "fetch-buildings": "node scripts/fetch-latest-buildings.mjs",
+    "build": "node scripts/fetch-latest-buildings.mjs --allow-fail && vite build",
     "preview": "vite preview"
   }
 }

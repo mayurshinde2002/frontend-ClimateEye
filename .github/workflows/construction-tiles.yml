@@ -1,0 +1,82 @@
+name: India construction tiles
+
+# Builds india-construction.pmtiles (construction sites + buildings under construction across India,
+# from OpenStreetMap) and uploads it to Cloudflare R2. See docs/construction-tiles.md for setup.
+on:
+  schedule:
+    - cron: '0 3 * * 1' # every Monday 03:00 UTC (Geofabrik publishes daily extracts)
+  workflow_dispatch:
+
+concurrency:
+  group: construction-tiles
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PBF_URL: https://download.geofabrik.de/asia/india-latest.osm.pbf
+      R2_BUCKET: ${{ vars.R2_BUCKET || 'climateye-tiles' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install osmium and tippecanoe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool build-essential libsqlite3-dev zlib1g-dev
+          git clone --depth 1 https://github.com/felt/tippecanoe.git /tmp/tippecanoe
+          make -C /tmp/tippecanoe -j"$(nproc)"
+          sudo make -C /tmp/tippecanoe install
+          osmium --version | head -n 1
+          tippecanoe --version
+
+      - name: Download India OpenStreetMap extract
+        run: curl -fL --retry 3 -o india.osm.pbf "$PBF_URL"
+
+      - name: Extract construction features
+        run: |
+          osmium tags-filter india.osm.pbf \
+            wr/building=construction wr/landuse=construction wr/building:construction wr/construction \
+            -o construction.osm.pbf --overwrite
+          osmium export construction.osm.pbf -f geojsonseq -o construction-raw.geojsonseq \
+            --attributes=type,id,timestamp --overwrite
+          node scripts/normalize-construction.mjs construction-raw.geojsonseq construction.geojsonseq india-construction.json
+          cat india-construction.json
+
+      - name: Build PMTiles
+        run: |
+          tippecanoe -o india-construction.pmtiles -l construction -n "India construction" \
+            --attribution "© OpenStreetMap contributors" \
+            -Z10 -z14 --drop-densest-as-needed --force construction.geojsonseq
+          ls -lh india-construction.pmtiles
+
+      - name: Keep a copy as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: india-construction
+          path: |
+            india-construction.pmtiles
+            india-construction.json
+          retention-days: 14
+
+      - name: Upload to Cloudflare R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "::warning::R2 secrets are not set - skipping upload (download the workflow artifact instead)."
+            exit 0
+          fi
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp india-construction.pmtiles "s3://${R2_BUCKET}/india-construction.pmtiles" \
+            --endpoint-url "$ENDPOINT" --content-type application/octet-stream --cache-control "public, max-age=3600"
+          aws s3 cp india-construction.json "s3://${R2_BUCKET}/india-construction.json" \
+            --endpoint-url "$ENDPOINT" --content-type application/json --cache-control "public, max-age=3600"

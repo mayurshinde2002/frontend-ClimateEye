@@ -6,6 +6,7 @@ import { fetchHourlyWeatherData, calculateGeometryCenter } from '../services/api
 import { transformRecordsByHeight } from '../utils/dataTransformers'
 import MonthlyWeatherCalendar from './MonthlyWeatherCalendar'
 import WeatherMetricsCards from './WeatherMetricsCards'
+import WindDirectionView from './WindDirectionView'
 import HourlyAQICards from './HourlyAQICards'
 import './WeatherDetailPage.css'
 
@@ -281,11 +282,18 @@ const WeatherDetailPage = () => {
 
       {/* Weather Metrics Cards */}
       {coordinates && (
-        <WeatherMetricsCards
-          geometry={geometry}
-          date={selectedDate}
-          isLive={isToday(parseISO(selectedDate))}
-        />
+        <>
+          <WeatherMetricsCards
+            geometry={geometry}
+            date={selectedDate}
+            isLive={isToday(parseISO(selectedDate))}
+          />
+          <WindDirectionView
+            latitude={coordinates.latitude}
+            longitude={coordinates.longitude}
+            date={selectedDate}
+          />
+        </>
       )}
 
       {/* Hourly Table */}

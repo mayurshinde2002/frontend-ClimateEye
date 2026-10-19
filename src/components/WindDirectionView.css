@@ -1,0 +1,164 @@
+.wind-view {
+  margin: 0 0 32px;
+  padding: 20px;
+  border: 1px solid rgba(20, 184, 166, 0.3);
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(35, 42, 70, 0.95) 0%, rgba(26, 31, 58, 0.9) 100%);
+  color: #e2e8f0;
+}
+
+.wind-view-header h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.wind-view-header p,
+.wind-view-status {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.wind-view-error {
+  margin-top: 12px;
+  color: #fca5a5;
+}
+
+.wind-current {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  margin-top: 18px;
+}
+
+.wind-compass {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  flex-shrink: 0;
+  border: 2px solid rgba(20, 184, 166, 0.45);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(15, 23, 42, 0.2), rgba(15, 23, 42, 0.65));
+}
+
+.wind-compass-label {
+  position: absolute;
+  font-size: 12px;
+  font-weight: 700;
+  color: #99f6e4;
+}
+
+.wind-compass-label.north { top: 6px; left: 50%; transform: translateX(-50%); }
+.wind-compass-label.east { right: 8px; top: 50%; transform: translateY(-50%); }
+.wind-compass-label.south { bottom: 6px; left: 50%; transform: translateX(-50%); }
+.wind-compass-label.west { left: 8px; top: 50%; transform: translateY(-50%); }
+
+.wind-arrow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin-left: -12px;
+  margin-top: -40px;
+  transform-origin: 12px 40px;
+}
+
+.wind-speed {
+  font-size: 42px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.wind-speed span,
+.wind-from,
+.wind-toward,
+.wind-gusts {
+  font-size: 14px;
+  font-weight: 500;
+  color: #cbd5e1;
+}
+
+.wind-cardinal {
+  margin-top: 6px;
+  font-size: 28px;
+  font-weight: 700;
+  color: #5eead4;
+}
+
+.wind-predicted {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.wind-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 72px;
+  margin-top: 22px;
+}
+
+.wind-bar-slot {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.wind-bar {
+  width: 100%;
+  border-radius: 3px 3px 0 0;
+  background: #14b8a6;
+}
+
+.wind-bar-slot.predicted .wind-bar {
+  background: #f59e0b;
+}
+
+.wind-hour-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.wind-hour {
+  display: grid;
+  grid-template-columns: 72px 1fr 1.2fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.wind-hour.current {
+  background: rgba(20, 184, 166, 0.15);
+}
+
+.wind-hour-time {
+  color: #99f6e4;
+  font-weight: 600;
+}
+
+.wind-hour-empty {
+  grid-column: 2 / -1;
+  color: #94a3b8;
+}
+
+@media (max-width: 640px) {
+  .wind-current {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .wind-hour {
+    grid-template-columns: 64px 1fr;
+  }
+}
