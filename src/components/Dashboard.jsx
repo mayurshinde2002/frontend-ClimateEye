@@ -1545,7 +1545,7 @@ const Dashboard = () => {
           ) : !showAnalysis ? (
             <div className="map-wrapper">
               <div className="view-toggle-container">
-                {/* <button
+                <button
                   className="view-toggle-button view-3d-button"
                   onClick={handleOpen3DView}
                   disabled={!selectedGeometry && !mapView}
@@ -1590,7 +1590,7 @@ const Dashboard = () => {
                     <path d="M3 16h8"></path>
                   </svg>
                   <span>Wind</span>
-                </button> */}
+                </button>
                 <button 
                   className={`view-toggle-button ${viewType === 'map' ? 'active' : ''}`}
                   onClick={toggleView}
