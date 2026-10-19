@@ -11,7 +11,7 @@ import RegionalWindMap from './RegionalWindMap'
 import TemperatureFieldMap from './TemperatureFieldMap'
 import TemperaturePanel from './TemperaturePanel'
 import RainFieldMap from './RainFieldMap'
-import LocationRadiusOverlay from './LocationRadiusOverlay'
+import LocationRadiusOverlay, { latLngBoundsForRadius } from './LocationRadiusOverlay'
 import './MapComponent.css'
 
 // Fix for default marker icons in Leaflet
@@ -352,8 +352,8 @@ const MapComponent = ({
         setSelectedRadius(500)
         setLocating(false)
         if (map) {
-          const circle = L.circle([next.lat, next.lng], { radius: 1000 })
-          map.fitBounds(circle.getBounds(), { padding: [48, 48], maxZoom: 17, animate: true })
+          const bounds = latLngBoundsForRadius(next.lat, next.lng, 1000)
+          map.fitBounds(bounds, { padding: [48, 48], maxZoom: 17, animate: true })
         }
       },
       (err) => {

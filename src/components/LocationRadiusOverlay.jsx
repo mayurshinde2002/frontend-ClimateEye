@@ -28,6 +28,17 @@ const boundsForRadius = (lat, lng, meters) => {
   return `${lng - dLng},${lat - dLat},${lng + dLng},${lat + dLat}`
 }
 
+// Circle.getBounds() needs a map instance — compute fit bounds without attaching a layer.
+export const latLngBoundsForRadius = (lat, lng, meters) => {
+  const pad = meters * 1.05
+  const dLat = pad / 111320
+  const dLng = pad / (111320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)))
+  return L.latLngBounds(
+    [lat - dLat, lng - dLng],
+    [lat + dLat, lng + dLng]
+  )
+}
+
 const formatRadius = (meters) => (
   meters >= 1000 ? `${meters / 1000} km` : `${meters} m`
 )
@@ -42,8 +53,8 @@ const LocationRadiusOverlay = ({ userLocation, selectedRadius, onSelectRadius })
 
   useEffect(() => {
     if (!userLocation || !map) return
-    const circle = L.circle([userLocation.lat, userLocation.lng], { radius: selectedRadius })
-    map.fitBounds(circle.getBounds(), { padding: [48, 48], maxZoom: 17, animate: true })
+    const bounds = latLngBoundsForRadius(userLocation.lat, userLocation.lng, selectedRadius)
+    map.fitBounds(bounds, { padding: [48, 48], maxZoom: 17, animate: true })
   }, [map, userLocation, selectedRadius])
 
   useEffect(() => {
