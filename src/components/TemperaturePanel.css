@@ -1,9 +1,9 @@
 .temperature-panel {
   position: absolute;
   top: 16px;
-  left: 56px;
+  left: 328px;
   z-index: 1000;
-  width: min(340px, calc(100% - 240px));
+  width: min(300px, calc(100% - 360px));
   max-height: calc(100% - 32px);
   overflow: auto;
   padding: 12px;
@@ -326,4 +326,41 @@
 
 .rain-scale-bar span:last-child {
   transform: translateX(-100%);
+}
+
+@media (max-width: 768px) {
+  .temperature-panel {
+    top: 56px;
+    left: auto;
+    right: 8px;
+    width: min(240px, calc(100% - 160px));
+    max-height: 32vh;
+  }
+
+  .temperature-scale,
+  .rain-scale {
+    bottom: calc(56px + env(safe-area-inset-bottom));
+    width: min(300px, calc(100% - 180px));
+    min-width: 0;
+  }
+
+  .map-container:has(.temperature-day-strip--bottom) .temperature-scale,
+  .map-container:has(.temperature-day-strip--bottom) .rain-scale {
+    bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+
+  .temperature-day-strip--bottom {
+    bottom: calc(52px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 480px) {
+  .temperature-now-main {
+    font-size: 32px;
+  }
+
+  .rain-scale-unit,
+  .temperature-scale-unit {
+    display: none;
+  }
 }

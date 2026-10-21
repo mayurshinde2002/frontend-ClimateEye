@@ -1,11 +1,11 @@
 .place-search {
   position: absolute;
   top: 12px;
-  left: 56px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 1000;
-  width: 340px;
-  max-width: calc(100% - 300px);
-  min-width: 220px;
+  width: min(340px, calc(100% - 520px));
+  min-width: 180px;
   font-family: inherit;
 }
 
@@ -134,13 +134,41 @@
   text-align: right;
 }
 
+@media (max-width: 1100px) {
+  .place-search {
+    width: min(280px, calc(100% - 360px));
+    min-width: 160px;
+  }
+}
+
 @media (max-width: 768px) {
   .place-search {
-    top: 56px;
-    left: 52px;
-    right: 8px;
-    width: auto;
-    max-width: none;
+    top: auto;
+    bottom: calc(56px + env(safe-area-inset-bottom));
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(280px, calc(100% - 180px));
+    max-width: 280px;
     min-width: 0;
+  }
+
+  .place-search-box {
+    height: 40px;
+  }
+
+  .place-search-results {
+    max-height: 40vh;
+  }
+}
+
+@media (max-width: 480px) {
+  .place-search {
+    bottom: calc(56px + env(safe-area-inset-bottom));
+    width: calc(100% - 16px);
+  }
+
+  .place-search-box input {
+    font-size: 16px; /* avoid iOS zoom on focus */
   }
 }

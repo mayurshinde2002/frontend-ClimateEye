@@ -7,9 +7,9 @@ import { ringCentroid } from '../utils/polygonIndex'
 
 export const DISTANCE_RADII = [
   { meters: 100, label: '100 m' },
-  { meters: 200, label: '200 m' },
-  { meters: 500, label: '500 m' },
-  { meters: 1000, label: '1 km' }
+  { meters: 1000, label: '1 km' },
+  { meters: 2000, label: '2 km' },
+  { meters: 10000, label: '10 km' }
 ]
 
 const haversineMeters = (lat1, lng1, lat2, lng2) => {

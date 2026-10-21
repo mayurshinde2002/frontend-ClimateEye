@@ -146,14 +146,24 @@
 
 @media (max-width: 768px) {
   .building-3d-legend {
-    bottom: 36px;
-    width: 220px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
   }
 
   .building-3d-back {
-    top: 8px;
+    top: max(8px, env(safe-area-inset-top));
     left: 8px;
     padding: 8px 12px;
     font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .building-3d-legend {
+    font-size: 11px;
+    padding: 8px 10px;
   }
 }

@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { format, subDays, startOfDay, isAfter, addDays, isBefore, isEqual, isToday, subHours, parseISO } from 'date-fns'
 import { LineChart, Line, BarChart, Bar, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Dot } from 'recharts'
-import MapComponent from './MapComponent'
+import MapComponent, { BASEMAPS } from './MapComponent'
+import AreaPollutantsPanel from './AreaPollutantsPanel'
 import WeatherSection from './WeatherSection'
 import AQISection from './AQISection'
 import LiveDashboardCards from './LiveDashboardCards'
@@ -24,10 +25,12 @@ const Dashboard = () => {
 
   const [startDate, setStartDate] = useState(format(oneWeekAgo, 'yyyy-MM-dd'))
   const [endDate, setEndDate] = useState(format(today, 'yyyy-MM-dd'))
-  const [viewType, setViewType] = useState('map') // 'map' or 'satellite'
+  const [viewType, setViewType] = useState('satellite')
+  const [basemapMenuOpen, setBasemapMenuOpen] = useState(false)
   const [showWind, setShowWind] = useState(false)
   const [showTemperature, setShowTemperature] = useState(false)
   const [showRain, setShowRain] = useState(false)
+  const [showAqi, setShowAqi] = useState(false)
   const [isDrawing, setIsDrawing] = useState(false)
   const [drawnGeometry, setDrawnGeometry] = useState(null)
   const [uploadedKML, setUploadedKML] = useState(null)
@@ -37,7 +40,6 @@ const Dashboard = () => {
   const [aqiData, setAqiData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [sidebarOpen, setSidebarOpen] = useState(false) // For mobile sidebar toggle
   const [viewMode, setViewMode] = useState('live') // 'live', 'daily', 'weekly', 'monthly'
   const [aqiChartData, setAqiChartData] = useState([]) // For AQI chart
   const [loadingChart, setLoadingChart] = useState(false)
@@ -156,6 +158,7 @@ const Dashboard = () => {
   const handleGeometryComplete = (geometry) => {
     setDrawnGeometry(geometry)
     setIsDrawing(false)
+    setShowAqi(true)
   }
 
   const handleCancelDrawing = () => {
@@ -179,6 +182,7 @@ const Dashboard = () => {
       })
       setDrawnGeometry(null) // Clear drawn geometry when KML is uploaded
       setIsDrawing(false)
+      setShowAqi(true)
     }
     reader.readAsText(file)
     e.target.value = '' // Reset file input
@@ -191,6 +195,7 @@ const Dashboard = () => {
     setMethaneOverlay(null)
     setMethaneError(null)
     setShow3DView(false)
+    setShowAqi(false)
   }
 
   const handleClearMethane = () => {
@@ -206,7 +211,6 @@ const Dashboard = () => {
 
     setMethaneLoading(true)
     setMethaneError(null)
-    setSidebarOpen(false)
 
     try {
       let geometry = drawnGeometry
@@ -256,8 +260,9 @@ const Dashboard = () => {
     }
   }
 
-  const toggleView = () => {
-    setViewType(prev => prev === 'map' ? 'satellite' : 'map')
+  const selectBasemap = (id) => {
+    setViewType(id)
+    setBasemapMenuOpen(false)
   }
 
   const getMaxDate = () => {
@@ -415,7 +420,6 @@ const Dashboard = () => {
     // Drawn area → building focus; otherwise tilt the current map view into 3D.
     if (!selectedGeometry && !mapView) return
     setShow3DView(true)
-    setSidebarOpen(false)
   }
 
   // Helper function to aggregate hourly data
@@ -749,9 +753,6 @@ const Dashboard = () => {
       alert('Please draw an area or upload a KML file first')
       return
     }
-
-    // Close sidebar on mobile when analyzing
-    setSidebarOpen(false)
 
     setLoading(true)
     setError(null)
@@ -1343,195 +1344,7 @@ const Dashboard = () => {
         </div>
       </header>
 
-      <div className="dashboard-content">
-        {/* Mobile sidebar toggle button */}
-        {!showAnalysis && (
-          <button 
-            className="sidebar-toggle"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            aria-label="Toggle sidebar"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              {sidebarOpen ? (
-                <path d="M18 6L6 18M6 6l12 12" />
-              ) : (
-                <path d="M3 12h18M3 6h18M3 18h18" />
-              )}
-            </svg>
-          </button>
-        )}
-        
-        {/* Sidebar overlay for mobile */}
-        {!showAnalysis && sidebarOpen && (
-          <div 
-            className="sidebar-overlay"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-        
-        <aside className={`sidebar ${showAnalysis ? 'analysis-mode' : ''} ${sidebarOpen ? 'open' : ''}`}>
-          {!showAnalysis ? (
-            <>
-              <div className="kml-section">
-                <div className="sidebar-header-mobile">
-                  <h2 className="sidebar-title">AREA SELECTION</h2>
-                  <button 
-                    className="sidebar-close-mobile"
-                    onClick={() => setSidebarOpen(false)}
-                    aria-label="Close sidebar"
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M18 6L6 18M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-                
-                <div className="kml-buttons">
-                  <button 
-                    className="action-button draw-button"
-                    onClick={handleDrawArea}
-                    disabled={isDrawing}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-                      <path d="M2 17l10 5 10-5"></path>
-                      <path d="M2 12l10 5 10-5"></path>
-                    </svg>
-                    Draw Area
-                  </button>
-                  
-                  <label className="action-button upload-button">
-                    <input
-                      type="file"
-                      accept=".kml,.kmz"
-                      onChange={handleKMLUpload}
-                      style={{ display: 'none' }}
-                    />
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                      <polyline points="17 8 12 3 7 8"></polyline>
-                      <line x1="12" y1="3" x2="12" y2="15"></line>
-                    </svg>
-                    Upload KML
-                  </label>
-                </div>
-
-                {(drawnGeometry || uploadedKML) && (
-                  <div className="geometry-info">
-                    <p className="info-text">
-                      {uploadedKML ? `KML: ${uploadedKML.name}` : 'Area drawn on map'}
-                    </p>
-                    <button className="clear-button" onClick={handleClearGeometry}>
-                      Clear
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div className="date-range-section">
-                <h2 className="sidebar-title">DATE RANGE</h2>
-                
-                <div className="date-input-group">
-                  <label htmlFor="start-date" className="date-label">
-                    Start Date
-                  </label>
-                  <input
-                    type="date"
-                    id="start-date"
-                    value={startDate}
-                    onChange={handleStartDateChange}
-                    max={endDate}
-                    className="date-input"
-                  />
-                </div>
-
-                <div className="date-input-group">
-                  <label htmlFor="end-date" className="date-label">
-                    End Date
-                  </label>
-                  <input
-                    type="date"
-                    id="end-date"
-                    value={endDate}
-                    onChange={handleEndDateChange}
-                    max={getMaxDate()}
-                    className="date-input"
-                  />
-                </div>
-
-                <div className="height-selection-section">
-                  <h2 className="sidebar-title">HEIGHT SELECTION</h2>
-                  <div className="height-buttons">
-                    {/* <button
-                      className={`height-button ${selectedHeight === '0-3meter' ? 'active' : ''}`}
-                      onClick={() => {
-                        console.log('[Dashboard] Setting selectedHeight to 0-3meter')
-                        setSelectedHeight('0-3meter')
-                      }}
-                      disabled={loading}
-                      title="View data from 0-3 meters height"
-                    >
-                      0-3 Meter
-                    </button> */}
-                    {/* <button
-                      className={`height-button ${selectedHeight === '3meter-above' || selectedHeight === null ? 'active' : ''}`}
-                      onClick={() => {
-                        console.log('[Dashboard] Setting selectedHeight to 3meter-above')
-                        setSelectedHeight('3meter-above')
-                      }}
-                      disabled={loading}
-                      title="View data from 3 meters above"
-                    >
-                      3 Meter Above
-                    </button> */}
-                  </div>
-                </div>
-
-                <button 
-                  className="update-button" 
-                  onClick={handleAnalyse}
-                  disabled={loading}
-                >
-                  {loading ? 'LOADING...' : 'ANALYSE'}
-                </button>
-
-                <button
-                  className={`methane-button ${methaneOverlay ? 'active' : ''}`}
-                  onClick={handleAnalyseMethane}
-                  disabled={methaneLoading || loading}
-                >
-                  {methaneLoading ? 'LOADING METHANE...' : 'Analysis Methane'}
-                </button>
-                {methaneError && <p className="methane-sidebar-note">{methaneError}</p>}
-
-                <button
-                  className={`methane-button ${show3DView ? 'active' : ''}`}
-                  onClick={handleOpen3DView}
-                  disabled={!selectedGeometry && !mapView}
-                  title={selectedGeometry ? 'Show 3D buildings for the drawn area' : 'Show this map area in 3D'}
-                >
-                  3D View
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="back-to-map-section">
-              <button 
-                className="back-to-map-button"
-                onClick={() => {
-                  setShowAnalysis(false)
-                  setSidebarOpen(false) // Close sidebar on mobile when going back to map
-                }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="15 18 9 12 15 6"></polyline>
-                </svg>
-                <span>Back to Map</span>
-              </button>
-            </div>
-          )}
-        </aside>
-
+      <div className={`dashboard-content${!showAnalysis ? ' dashboard-content--map-full' : ''}`}>
         <main className="main-content">
           {!showAnalysis && show3DView && (selectedGeometry || mapView) ? (
             <Suspense fallback={<div className="building-3d-loading">Loading 3D view…</div>}>
@@ -1544,88 +1357,179 @@ const Dashboard = () => {
             </Suspense>
           ) : !showAnalysis ? (
             <div className="map-wrapper">
-              <div className="view-toggle-container">
-                <button
-                  className="view-toggle-button view-3d-button"
-                  onClick={handleOpen3DView}
-                  disabled={!selectedGeometry && !mapView}
-                  title={selectedGeometry ? 'Show 3D buildings for the drawn area' : 'Show this map area in 3D'}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"></path>
-                    <path d="M12 22V12"></path>
-                    <path d="M21 7l-9 5-9-5"></path>
-                  </svg>
-                  <span>3D</span>
-                </button>
-                <button
-                  className={`view-toggle-button ${showTemperature ? 'active' : ''}`}
-                  onClick={() => setShowTemperature((on) => !on)}
-                  title={showTemperature ? 'Hide temperature' : 'Show temperature on the map'}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
-                  </svg>
-                  <span>Temp</span>
-                </button>
-                <button
-                  className={`view-toggle-button ${showRain ? 'active' : ''}`}
-                  onClick={() => setShowRain((on) => !on)}
-                  title={showRain ? 'Hide rain' : 'Show rain on the map'}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M16 13V21M8 13V21M12 15V23"></path>
-                    <path d="M20 10.5a5.5 5.5 0 0 0-10.2-2.8A4.5 4.5 0 1 0 6.5 16H19a3.5 3.5 0 0 0 1-5.5z"></path>
-                  </svg>
-                  <span>Rain</span>
-                </button>
-                <button
-                  className={`view-toggle-button ${showWind ? 'active' : ''}`}
-                  onClick={() => setShowWind((on) => !on)}
-                  title={showWind ? 'Hide wind' : 'Show wind on the map'}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M3 8h11a3 3 0 1 0-3-3"></path>
-                    <path d="M3 12h15a3 3 0 1 1-3 3"></path>
-                    <path d="M3 16h8"></path>
-                  </svg>
-                  <span>Wind</span>
-                </button>
-                <button 
-                  className={`view-toggle-button ${viewType === 'map' ? 'active' : ''}`}
-                  onClick={toggleView}
-                  title={viewType === 'map' ? 'Switch to Satellite View' : 'Switch to Map View'}
-                >
-                  {viewType === 'map' ? (
-                    <>
+              <div className="map-left-stack">
+                <div className="map-floating-actions">
+                  <div className="map-tools-row">
+                    <button
+                      className="action-button draw-button"
+                      onClick={handleDrawArea}
+                      disabled={isDrawing}
+                      type="button"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                        <path d="M2 17l10 5 10-5"></path>
+                        <path d="M2 12l10 5 10-5"></path>
+                      </svg>
+                      <span className="action-button-label">Draw Area</span>
+                    </button>
+
+                    <label className="action-button upload-button">
+                      <input
+                        type="file"
+                        accept=".kml,.kmz"
+                        onChange={handleKMLUpload}
+                        style={{ display: 'none' }}
+                      />
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                      </svg>
+                      <span className="action-button-label">Upload KML</span>
+                    </label>
+                  </div>
+                </div>
+
+                {selectedGeometry && (
+                  <AreaPollutantsPanel
+                    geometry={selectedGeometry}
+                    areaLabel={uploadedKML ? `KML: ${uploadedKML.name}` : 'Drawn area'}
+                    onClear={handleClearGeometry}
+                  />
+                )}
+              </div>
+
+              <div className="view-toggle-container view-toggle-container--on-map">
+                <div className="view-toggle-row view-toggle-row--layers">
+                  <button
+                    className={`view-toggle-button ${showTemperature ? 'active' : ''}`}
+                    onClick={() => setShowTemperature((on) => !on)}
+                    title={showTemperature ? 'Hide temperature' : 'Show temperature on the map'}
+                    type="button"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
+                    </svg>
+                    <span className="view-toggle-label">Temp</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${showRain ? 'active' : ''}`}
+                    onClick={() => setShowRain((on) => !on)}
+                    title={showRain ? 'Hide rain' : 'Show rain on the map'}
+                    type="button"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M16 13V21M8 13V21M12 15V23"></path>
+                      <path d="M20 10.5a5.5 5.5 0 0 0-10.2-2.8A4.5 4.5 0 1 0 6.5 16H19a3.5 3.5 0 0 0 1-5.5z"></path>
+                    </svg>
+                    <span className="view-toggle-label">Rain</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${showWind ? 'active' : ''}`}
+                    onClick={() => setShowWind((on) => !on)}
+                    title={showWind ? 'Hide wind' : 'Show wind on the map'}
+                    type="button"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M3 8h11a3 3 0 1 0-3-3"></path>
+                      <path d="M3 12h15a3 3 0 1 1-3 3"></path>
+                      <path d="M3 16h8"></path>
+                    </svg>
+                    <span className="view-toggle-label">Wind</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${showAqi ? 'active' : ''}`}
+                    onClick={() => setShowAqi((on) => !on)}
+                    title={
+                      showAqi
+                        ? 'Hide AQI grid'
+                        : 'Show AQI grid for the drawn area (~50–100 m cells)'
+                    }
+                    type="button"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 2v4"></path>
+                      <path d="M12 18v4"></path>
+                      <path d="M4.93 4.93l2.83 2.83"></path>
+                      <path d="M16.24 16.24l2.83 2.83"></path>
+                      <path d="M2 12h4"></path>
+                      <path d="M18 12h4"></path>
+                      <path d="M4.93 19.07l2.83-2.83"></path>
+                      <path d="M16.24 7.76l2.83-2.83"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    <span className="view-toggle-label">AQI</span>
+                  </button>
+                  <div className="basemap-picker">
+                    <button
+                      className={`view-toggle-button ${basemapMenuOpen ? 'active' : ''}`}
+                      onClick={() => setBasemapMenuOpen((open) => !open)}
+                      title="Choose basemap"
+                      type="button"
+                      aria-expanded={basemapMenuOpen}
+                    >
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
                         <circle cx="12" cy="10" r="3"></circle>
                       </svg>
-                      <span>Map</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
-                        <line x1="7" y1="2" x2="7" y2="22"></line>
-                        <line x1="17" y1="2" x2="17" y2="22"></line>
-                        <line x1="2" y1="12" x2="22" y2="12"></line>
-                        <line x1="2" y1="7" x2="7" y2="7"></line>
-                        <line x1="2" y1="17" x2="7" y2="17"></line>
-                        <line x1="17" y1="17" x2="22" y2="17"></line>
-                        <line x1="17" y1="7" x2="22" y2="7"></line>
-                      </svg>
-                      <span>Satellite</span>
-                    </>
-                  )}
+                      <span className="view-toggle-label">{BASEMAPS[viewType]?.label || 'Map'}</span>
+                    </button>
+                    {basemapMenuOpen && (
+                      <div className="basemap-menu" role="menu">
+                        {Object.values(BASEMAPS).map((basemap) => (
+                          <button
+                            key={basemap.id}
+                            className={`view-toggle-button basemap-menu-item ${viewType === basemap.id ? 'active' : ''}`}
+                            onClick={() => selectBasemap(basemap.id)}
+                            type="button"
+                            role="menuitem"
+                          >
+                            <span>{basemap.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="map-bottom-actions">
+                <button
+                  className={`view-toggle-button ${loading ? 'active' : ''}`}
+                  onClick={handleAnalyse}
+                  disabled={loading}
+                  type="button"
+                >
+                  <span>{loading ? 'Loading…' : 'Analyse'}</span>
+                </button>
+                <button
+                  className={`view-toggle-button ${methaneOverlay ? 'active' : ''}`}
+                  onClick={handleAnalyseMethane}
+                  disabled={methaneLoading || loading}
+                  type="button"
+                >
+                  <span className="label-full">{methaneLoading ? 'Loading…' : 'Analysis Methane'}</span>
+                  <span className="label-short">{methaneLoading ? '…' : 'Methane'}</span>
+                </button>
+                <button
+                  className={`view-toggle-button ${show3DView ? 'active' : ''}`}
+                  onClick={handleOpen3DView}
+                  disabled={!selectedGeometry && !mapView}
+                  title={selectedGeometry ? 'Show 3D buildings for the drawn area' : 'Show this map area in 3D'}
+                  type="button"
+                >
+                  <span>3D View</span>
                 </button>
               </div>
+              {methaneError && <p className="methane-map-note">{methaneError}</p>}
+
               <MapComponent 
                 viewType={viewType}
                 showWind={showWind}
                 showTemperature={showTemperature}
                 showRain={showRain}
+                showAqi={showAqi}
                 drawnGeometry={drawnGeometry}
                 uploadedKML={uploadedKML}
                 isDrawing={isDrawing}
@@ -1639,6 +1543,16 @@ const Dashboard = () => {
             </div>
           ) : (
             <div className="analysis-content">
+              <button
+                className="back-to-map-button back-to-map-floating"
+                onClick={() => setShowAnalysis(false)}
+                type="button"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="15 18 9 12 15 6"></polyline>
+                </svg>
+                <span>Back to Map</span>
+              </button>
               <div className="date-navigation-header">
                 <button 
                   className="nav-arrow-button"

@@ -11,6 +11,7 @@ import RegionalWindMap from './RegionalWindMap'
 import TemperatureFieldMap from './TemperatureFieldMap'
 import TemperaturePanel from './TemperaturePanel'
 import RainFieldMap from './RainFieldMap'
+import AQIGridMap from './AQIGridMap'
 import LocationRadiusOverlay, { latLngBoundsForRadius } from './LocationRadiusOverlay'
 import './MapComponent.css'
 
@@ -21,6 +22,43 @@ L.Icon.Default.mergeOptions({
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 })
+
+export const BASEMAPS = {
+  streets: {
+    id: 'streets',
+    label: 'Streets',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    labels: false,
+    maxZoom: 19
+  },
+  satellite: {
+    id: 'satellite',
+    label: 'Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: '&copy; <a href="https://www.esri.com/">Esri</a>',
+    labels: true,
+    maxZoom: 19
+  },
+  terrain: {
+    id: 'terrain',
+    label: 'Terrain',
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)',
+    labels: false,
+    maxZoom: 17
+  },
+  dark: {
+    id: 'dark',
+    label: 'Dark',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+    labels: false,
+    maxZoom: 19
+  }
+}
+
+const LABEL_TILE_LAYER = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
 
 // Component to handle map view changes and zoom to bounds
 const MapViewUpdater = ({ polygonCoordinates, methanePoints }) => {
@@ -99,13 +137,14 @@ const currentWindReading = (records) => {
 
 const MapPanes = () => {
   const map = useMap()
-  const ensurePane = (name, zIndex) => {
+  const ensurePane = (name, zIndex, pointerEvents = 'none') => {
     const pane = map.getPane(name) || map.createPane(name)
     pane.style.zIndex = String(zIndex)
-    pane.style.pointerEvents = 'none'
+    pane.style.pointerEvents = pointerEvents
   }
   ensurePane('satelliteBase', 100)
   ensurePane('weatherField', 450)
+  ensurePane('aqiGrid', 460, 'auto')
   ensurePane('countryBorders', 520)
   ensurePane('placeLabels', 640)
   return null
@@ -270,6 +309,7 @@ const MapComponent = ({
   showWind = false,
   showTemperature = false,
   showRain = false,
+  showAqi = false,
   drawnGeometry,
   uploadedKML,
   isDrawing,
@@ -287,7 +327,7 @@ const MapComponent = ({
   const [searchedPlace, setSearchedPlace] = useState(null)
   const [areaConstruction, setAreaConstruction] = useState(null)
   const [userLocation, setUserLocation] = useState(null)
-  const [selectedRadius, setSelectedRadius] = useState(500)
+  const [selectedRadius, setSelectedRadius] = useState(1000)
   const [locating, setLocating] = useState(false)
   const [locationError, setLocationError] = useState(null)
   const [viewCenter, setViewCenter] = useState({ latitude: mapCenter[0], longitude: mapCenter[1] })
@@ -349,11 +389,11 @@ const MapComponent = ({
           accuracy: position.coords.accuracy
         }
         setUserLocation(next)
-        setSelectedRadius(500)
+        setSelectedRadius(1000)
         setLocating(false)
         if (map) {
           const bounds = latLngBoundsForRadius(next.lat, next.lng, 1000)
-          map.fitBounds(bounds, { padding: [48, 48], maxZoom: 17, animate: true })
+          map.fitBounds(bounds, { padding: [48, 48], maxZoom: 15, animate: true })
         }
       },
       (err) => {
@@ -395,6 +435,18 @@ const MapComponent = ({
       .filter(Boolean)
   }, [methaneOverlay])
 
+  const aqiGeometry = useMemo(() => {
+    if (drawnGeometry?.coordinates?.[0]?.length) return drawnGeometry
+    if (!polygonCoordinates?.length) return null
+    const ring = polygonCoordinates.map(([lat, lng]) => [lng, lat])
+    const first = ring[0]
+    const last = ring[ring.length - 1]
+    if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
+      ring.push([...first])
+    }
+    return { type: 'Polygon', coordinates: [ring] }
+  }, [drawnGeometry, polygonCoordinates])
+
   useEffect(() => {
     if (drawnGeometry && drawnGeometry.coordinates) {
       // Convert GeoJSON [lng, lat] to Leaflet [lat, lng]
@@ -435,11 +487,7 @@ const MapComponent = ({
     }
   }
 
-  const satelliteTileLayer = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-  
-  // Label layer overlay for location names only (shows place names, cities, states, countries)
-  // Using World Boundaries and Places - provides clean labels without road clutter
-  const labelTileLayer = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
+  const basemap = BASEMAPS[viewType] || BASEMAPS.satellite
 
   return (
     <div className="map-container">
@@ -458,6 +506,7 @@ const MapComponent = ({
         {showWind && <RegionalWindMap />}
         {showTemperature && <TemperatureFieldMap />}
         {showRain && <RainFieldMap />}
+        {showAqi && <AQIGridMap geometry={aqiGeometry} />}
 
         {searchedPlace && (
           <SearchedPlaceMarker place={searchedPlace} />
@@ -487,19 +536,24 @@ const MapComponent = ({
             />
           </>
         )}
-       
-        <TileLayer
-          attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
-          url={satelliteTileLayer}
-          pane="satelliteBase"
-        />
 
         <TileLayer
-          attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
-          url={labelTileLayer}
-          pane="placeLabels"
-          opacity={1}
+          key={`base-${basemap.id}`}
+          attribution={basemap.attribution}
+          url={basemap.url}
+          pane="satelliteBase"
+          maxZoom={basemap.maxZoom || 19}
         />
+
+        {basemap.labels && (
+          <TileLayer
+            key={`labels-${basemap.id}`}
+            attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
+            url={LABEL_TILE_LAYER}
+            pane="placeLabels"
+            opacity={1}
+          />
+        )}
 
         <CountryBorders />
        
