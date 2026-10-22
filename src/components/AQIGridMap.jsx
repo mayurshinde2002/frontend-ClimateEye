@@ -25,15 +25,6 @@ const AQI_STOPS = [
   [500, [127, 29, 29]]
 ]
 
-const AQI_LEGEND = [
-  { label: 'Good', color: '#10b981' },
-  { label: 'Moderate', color: '#f59e0b' },
-  { label: 'Poor', color: '#f97316' },
-  { label: 'Unhealthy', color: '#ef4444' },
-  { label: 'Severe', color: '#8b5cf6' },
-  { label: 'Hazardous', color: '#7f1d1d' }
-]
-
 const finiteOrNull = (value) => {
   if (value === null || value === undefined || value === '') return null
   const number = Number(value)
@@ -401,30 +392,23 @@ const AQIGridMap = ({ geometry }) => {
         />
       )}
 
-      <div className="aqi-grid-legend">
-        <div className="aqi-grid-legend-title">
-          AQI heatmap · ~{cellMeters} m
-        </div>
+      <div className="weather-scale aqi-weather-scale">
+        <span className="weather-scale-title">AQI</span>
         {loading && (
-          <div className="aqi-grid-legend-status">
-            Loading {done}/{total} samples…
-          </div>
+          <span className="weather-scale-note">Loading {done}/{total}…</span>
         )}
-        {!loading && samples.length > 0 && (
-          <div className="aqi-grid-legend-status">
-            {samples.length} samples fused · null skipped
-          </div>
+        {error && <span className="weather-scale-note" style={{ color: '#fca5a5' }}>{error}</span>}
+        {!loading && !error && (
+          <>
+            <span className="weather-scale-unit">~{cellMeters} m</span>
+            <div
+              className="weather-scale-bar"
+              style={{
+                background: 'linear-gradient(90deg, #10b981 0%, #f59e0b 20%, #f97316 40%, #ef4444 60%, #8b5cf6 80%, #7f1d1d 100%)'
+              }}
+            />
+          </>
         )}
-        {error && <div className="aqi-grid-legend-error">{error}</div>}
-        <div className="aqi-grid-legend-bar" />
-        <div className="aqi-grid-legend-scale">
-          {AQI_LEGEND.map((entry) => (
-            <div key={entry.label} className="aqi-grid-legend-item">
-              <span className="aqi-grid-swatch" style={{ background: entry.color }} />
-              <span>{entry.label}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </>
   )

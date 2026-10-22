@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { fetchHourlyWeatherData } from '../services/api'
+import { fieldViewKey, fixedGridPoints, softFromStep } from '../utils/weatherFieldGrid'
 
 // Windy-style temperature ramp: deep blue → cyan → green → yellow → orange → burnt red
 const TEMP_STOPS = [
@@ -35,51 +36,6 @@ const finiteOrNull = (value) => {
   if (value === null || value === undefined || value === '') return null
   const number = Number(value)
   return Number.isFinite(number) ? number : null
-}
-
-const snap = (value, step) => Math.round(value / step) * step
-
-const stepForZoom = (zoom) => {
-  if (zoom < 5) return 2
-  if (zoom < 7) return 1
-  if (zoom < 9) return 0.5
-  return 0.25
-}
-
-const gridPoints = (bounds, zoom) => {
-  let step = stepForZoom(zoom)
-  const build = (cell) => {
-    const south = snap(bounds.getSouth(), cell) - cell
-    const north = snap(bounds.getNorth(), cell) + cell
-    const west = snap(bounds.getWest(), cell) - cell
-    const east = snap(bounds.getEast(), cell) + cell
-    const points = []
-    const seen = new Set()
-    for (let lat = south; lat <= north + cell * 0.01; lat += cell) {
-      for (let lng = west; lng <= east + cell * 0.01; lng += cell) {
-        const point = {
-          lat: Math.round(lat * 1000) / 1000,
-          lng: Math.round(lng * 1000) / 1000
-        }
-        const key = `${point.lat}:${point.lng}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        points.push(point)
-      }
-    }
-    return points
-  }
-
-  let points = build(step)
-  while (points.length > MAX_POINTS && step < 4) {
-    step *= 2
-    points = build(step)
-  }
-  if (points.length > MAX_POINTS) {
-    const stride = Math.ceil(points.length / MAX_POINTS)
-    points = points.filter((_, index) => index % stride === 0).slice(0, MAX_POINTS)
-  }
-  return { points, step }
 }
 
 // Backend hourly dates are UTC without a Z suffix — parse as UTC, not local.
@@ -162,8 +118,8 @@ const TemperatureFieldMap = () => {
     tip.style.display = 'none'
     const ctx = canvas.getContext('2d')
     const heat = document.createElement('canvas')
-    heat.width = 360
-    heat.height = 220
+    heat.width = 420
+    heat.height = 260
     const heatCtx = heat.getContext('2d', { willReadFrequently: true })
     const fieldRef = { current: [] }
     let alive = true
@@ -174,6 +130,7 @@ const TemperatureFieldMap = () => {
     let pixelWidth = 0
     let pixelHeight = 0
     let soft = 0.03
+    let lastViewKey = ''
 
     const syncCanvas = () => {
       const size = map.getSize()
@@ -214,7 +171,7 @@ const TemperatureFieldMap = () => {
           pixels[offset] = color[0]
           pixels[offset + 1] = color[1]
           pixels[offset + 2] = color[2]
-          pixels[offset + 3] = 210
+          pixels[offset + 3] = 220
         }
       }
       heatCtx.putImageData(image, 0, 0)
@@ -228,7 +185,7 @@ const TemperatureFieldMap = () => {
       const east = bounds.getEast() + pad
       const samples = []
       sampleCache.forEach((sample, key) => {
-        if (!sample || !key.startsWith(`v2:${date}:`)) return
+        if (!sample || !key.startsWith(`v3:${date}:`)) return
         if (sample.lat < south || sample.lat > north || sample.lng < west || sample.lng > east) return
         if (sample.temp == null) return
         samples.push(sample)
@@ -236,20 +193,29 @@ const TemperatureFieldMap = () => {
       return samples
     }
 
-    const loadField = async () => {
+    const loadField = async (force = false) => {
+      const bounds = map.getBounds()
+      const zoom = map.getZoom()
+      const { points, step } = fixedGridPoints(bounds, zoom, MAX_POINTS)
+      const viewKey = fieldViewKey(bounds, zoom, step)
+      // Skip refetch when only the window size changed (same geographic lattice).
+      if (!force && viewKey === lastViewKey && fieldRef.current.length) {
+        soft = softFromStep(step)
+        dirty = true
+        return
+      }
+      lastViewKey = viewKey
+
       const id = generation + 1
       generation = id
       const date = todayDate()
-      const bounds = map.getBounds()
-      const zoom = map.getZoom()
-      const { points, step } = gridPoints(bounds, zoom)
-      soft = Math.max(0.012, step * 0.08)
+      soft = softFromStep(step)
       if (!fieldRef.current.length) setStatus('loading')
 
       const unique = []
       const seen = new Set()
       points.forEach((point) => {
-        const key = `v2:${date}:${point.lat}:${point.lng}`
+        const key = `v3:${date}:${point.lat}:${point.lng}`
         if (seen.has(key)) return
         seen.add(key)
         unique.push({ ...point, key })
@@ -266,7 +232,7 @@ const TemperatureFieldMap = () => {
             const data = await fetchHourlyWeatherData(point.lat, point.lng, date)
             if (generation !== id) return
             const temp = currentTemperature(data?.hourly_records)
-            if (sampleCache.size > 280) sampleCache.delete(sampleCache.keys().next().value)
+            if (sampleCache.size > 400) sampleCache.delete(sampleCache.keys().next().value)
             sampleCache.set(point.key, { lat: point.lat, lng: point.lng, temp })
           } catch {
             sampleCache.set(point.key, { lat: point.lat, lng: point.lng, temp: null })
@@ -276,7 +242,7 @@ const TemperatureFieldMap = () => {
 
       await Promise.all([worker(), worker(), worker(), worker()])
       if (!alive || generation !== id) return
-      const samples = pointsNearView(bounds, Math.max(step * 2, 1))
+      const samples = pointsNearView(bounds, Math.max(step * 2.5, 1))
       if (samples.length) {
         fieldRef.current = samples
         dirty = true
@@ -304,9 +270,10 @@ const TemperatureFieldMap = () => {
     }
 
     const markDirty = () => { dirty = true }
+    // Resize / pan animation: repaint only. Fetch only when geographic view key changes.
     const scheduleLoad = () => {
       clearTimeout(timer)
-      timer = window.setTimeout(loadField, 450)
+      timer = window.setTimeout(() => loadField(false), 400)
     }
 
     const onMouseMove = (event) => {
@@ -333,12 +300,12 @@ const TemperatureFieldMap = () => {
     frameId = requestAnimationFrame(tick)
     map.on('move', markDirty)
     map.on('zoom', markDirty)
-    map.on('resize', markDirty)
+    map.on('resize', markDirty) // paint only — no API reload
     map.on('moveend', scheduleLoad)
     map.on('zoomend', scheduleLoad)
     map.on('mousemove', onMouseMove)
     map.on('mouseout', onMouseOut)
-    loadField()
+    loadField(true)
 
     return () => {
       alive = false
@@ -358,13 +325,19 @@ const TemperatureFieldMap = () => {
   }, [map])
 
   return createPortal(
-    <div className="temperature-scale">
-      {status === 'loading' && <span className="regional-wind-scale-note">Loading temperature…</span>}
-      {status === 'empty' && <span className="regional-wind-scale-note">Temperature is unavailable</span>}
+    <div className="weather-scale temperature-scale">
+      {status === 'loading' && <span className="weather-scale-note">Loading temperature…</span>}
+      {status === 'empty' && <span className="weather-scale-note">Temperature unavailable</span>}
       {status === 'ready' && (
         <>
-          <span className="temperature-scale-unit">°C · now</span>
-          <div className="temperature-scale-bar">
+          <span className="weather-scale-title">Temp</span>
+          <span className="weather-scale-unit temperature-scale-unit">°C</span>
+          <div
+            className="weather-scale-bar temperature-scale-bar"
+            style={{
+              background: 'linear-gradient(90deg, #122896 0%, #30aad6 18%, #37cd5f 38%, #ebe528 58%, #f0821c 78%, #912026 100%)'
+            }}
+          >
             {TEMP_LABELS.map((value) => (
               <span key={value} style={{ left: `${((value + 20) / 60) * 100}%` }}>{value}</span>
             ))}

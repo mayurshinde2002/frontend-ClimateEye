@@ -6,12 +6,13 @@ import DrawAreaComponent from './DrawAreaComponent'
 import PlaceSearch from './PlaceSearch'
 import { fetchAreaConstruction } from '../services/areaConstruction'
 import { CONSTRUCTION_COLOR, describeConstruction } from '../services/constructionTiles'
-import { calculateGeometryCenter, fetchHourlyWeatherData } from '../services/api'
+import { calculateGeometryCenter } from '../services/api'
 import RegionalWindMap from './RegionalWindMap'
 import TemperatureFieldMap from './TemperatureFieldMap'
 import TemperaturePanel from './TemperaturePanel'
 import RainFieldMap from './RainFieldMap'
 import AQIGridMap from './AQIGridMap'
+import SensorDataLayer from './SensorDataLayer'
 import LocationRadiusOverlay, { latLngBoundsForRadius } from './LocationRadiusOverlay'
 import './MapComponent.css'
 
@@ -97,42 +98,11 @@ const SearchedPlaceMarker = ({ place }) => {
 
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`)
 
-const WIND_CARDINALS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
-
 const todayDate = () => {
   const now = new Date()
   const month = String(now.getMonth() + 1).padStart(2, '0')
   const day = String(now.getDate()).padStart(2, '0')
   return `${now.getFullYear()}-${month}-${day}`
-}
-
-const finiteOrNull = (value) => {
-  if (value === null || value === undefined || value === '') return null
-  const number = Number(value)
-  return Number.isFinite(number) ? number : null
-}
-
-const cardinalFromDegrees = (degrees) => {
-  const value = finiteOrNull(degrees)
-  if (value === null) return null
-  const normalized = ((value % 360) + 360) % 360
-  return WIND_CARDINALS[Math.floor((normalized + 11.25) / 22.5) % 16]
-}
-
-const currentWindReading = (records) => {
-  const now = new Date()
-  const hours = (records || [])
-    .map((record) => ({
-      speed: finiteOrNull(record.wind_speed),
-      direction: finiteOrNull(record.wind_direction),
-      cardinal: record.wind_direction_cardinal,
-      gusts: finiteOrNull(record.wind_gusts),
-      predicted: record.data_source === 'Prediction',
-      time: new Date(String(record.date || '').replace(' ', 'T'))
-    }))
-    .filter((record) => !Number.isNaN(record.time.getTime()) && record.time <= now)
-    .sort((a, b) => a.time - b.time)
-  return hours.length ? hours[hours.length - 1] : null
 }
 
 const MapPanes = () => {
@@ -310,6 +280,8 @@ const MapComponent = ({
   showTemperature = false,
   showRain = false,
   showAqi = false,
+  showSensorData = false,
+  onToggleSensorData,
   drawnGeometry,
   uploadedKML,
   isDrawing,
@@ -331,13 +303,10 @@ const MapComponent = ({
   const [locating, setLocating] = useState(false)
   const [locationError, setLocationError] = useState(null)
   const [viewCenter, setViewCenter] = useState({ latitude: mapCenter[0], longitude: mapCenter[1] })
-  const [windReading, setWindReading] = useState(null)
-  const [windLoading, setWindLoading] = useState(false)
-  const [windError, setWindError] = useState(null)
 
   const handleViewCenter = useMemo(() => (center) => setViewCenter(center), [])
 
-  const windPoint = useMemo(() => {
+  const focusPoint = useMemo(() => {
     if (userLocation) return { latitude: userLocation.lat, longitude: userLocation.lng }
     if (searchedPlace) return { latitude: searchedPlace.lat, longitude: searchedPlace.lng }
     if (drawnGeometry) {
@@ -347,34 +316,21 @@ const MapComponent = ({
     return viewCenter
   }, [userLocation, searchedPlace, drawnGeometry, viewCenter])
 
-  const windLatitude = Number(windPoint.latitude.toFixed(2))
-  const windLongitude = Number(windPoint.longitude.toFixed(2))
+  const focusLatitude = Number(focusPoint.latitude.toFixed(2))
+  const focusLongitude = Number(focusPoint.longitude.toFixed(2))
 
-  useEffect(() => {
-    if (!showWind || !Number.isFinite(windLatitude) || !Number.isFinite(windLongitude)) return
-    let cancelled = false
-    setWindLoading(true)
-    setWindError(null)
-    fetchHourlyWeatherData(windLatitude, windLongitude, todayDate())
-      .then((data) => {
-        if (!cancelled) setWindReading(currentWindReading(data?.hourly_records))
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setWindReading(null)
-          setWindError(err.message || 'Wind data could not be loaded')
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setWindLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [showWind, windLatitude, windLongitude])
-
-  const windReadable = windReading && windReading.speed !== null && windReading.direction !== null
-  const windToward = windReadable ? (windReading.direction + 180) % 360 : null
+  const clearUserLocation = () => {
+    setUserLocation(null)
+    setLocationError(null)
+    setLocating(false)
+  }
 
   const locateUser = () => {
+    // Toggle off: hide marker, rings, and nearby data panel
+    if (userLocation) {
+      clearUserLocation()
+      return
+    }
     if (!navigator.geolocation) {
       setLocationError('This browser cannot read your location.')
       return
@@ -507,6 +463,14 @@ const MapComponent = ({
         {showTemperature && <TemperatureFieldMap />}
         {showRain && <RainFieldMap />}
         {showAqi && <AQIGridMap geometry={aqiGeometry} />}
+
+        {showSensorData && (
+          <SensorDataLayer
+            latitude={focusPoint.latitude}
+            longitude={focusPoint.longitude}
+            onClose={onToggleSensorData}
+          />
+        )}
 
         {searchedPlace && (
           <SearchedPlaceMarker place={searchedPlace} />
@@ -656,38 +620,19 @@ const MapComponent = ({
 
       {showTemperature && (
         <TemperaturePanel
-          latitude={Math.round(windLatitude * 2) / 2}
-          longitude={Math.round(windLongitude * 2) / 2}
+          latitude={Math.round(focusLatitude * 2) / 2}
+          longitude={Math.round(focusLongitude * 2) / 2}
           date={todayDate()}
         />
       )}
 
-      {showWind && <div className="wind-map-card">
-        <div className="wind-map-card-title">Wind</div>
-        {windLoading && <div className="wind-map-card-value">Loading…</div>}
-        {!windLoading && windError && <div className="wind-map-card-value">{windError}</div>}
-        {!windLoading && !windError && windReadable && (
-          <>
-            <div className="wind-map-card-value">{windReading.speed.toFixed(1)} km/h</div>
-            <div className="wind-map-card-detail">
-              From {windReading.cardinal || cardinalFromDegrees(windReading.direction)} ({Math.round(windReading.direction)}°)
-            </div>
-            <div className="wind-map-card-detail">
-              Toward {cardinalFromDegrees(windToward)} ({Math.round(windToward)}°)
-            </div>
-          </>
-        )}
-        {!windLoading && !windError && !windReadable && (
-          <div className="wind-map-card-value">No wind data</div>
-        )}
-      </div>}
-
       <button
         type="button"
-        className={`locate-button${locating ? ' locating' : ''}`}
+        className={`locate-button${locating ? ' locating' : ''}${userLocation ? ' active' : ''}`}
         onClick={locateUser}
         disabled={locating}
-        title="Show my location"
+        title={userLocation ? 'Hide my location' : 'Show my location'}
+        aria-pressed={Boolean(userLocation)}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="12" r="3"></circle>

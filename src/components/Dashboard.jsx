@@ -31,6 +31,7 @@ const Dashboard = () => {
   const [showTemperature, setShowTemperature] = useState(false)
   const [showRain, setShowRain] = useState(false)
   const [showAqi, setShowAqi] = useState(false)
+  const [showSensorData, setShowSensorData] = useState(false)
   const [isDrawing, setIsDrawing] = useState(false)
   const [drawnGeometry, setDrawnGeometry] = useState(null)
   const [uploadedKML, setUploadedKML] = useState(null)
@@ -158,6 +159,8 @@ const Dashboard = () => {
   const handleGeometryComplete = (geometry) => {
     setDrawnGeometry(geometry)
     setIsDrawing(false)
+    setShowTemperature(false)
+    setShowRain(false)
     setShowAqi(true)
   }
 
@@ -182,6 +185,8 @@ const Dashboard = () => {
       })
       setDrawnGeometry(null) // Clear drawn geometry when KML is uploaded
       setIsDrawing(false)
+      setShowTemperature(false)
+      setShowRain(false)
       setShowAqi(true)
     }
     reader.readAsText(file)
@@ -263,6 +268,42 @@ const Dashboard = () => {
   const selectBasemap = (id) => {
     setViewType(id)
     setBasemapMenuOpen(false)
+  }
+
+  // Windy-style: one color field at a time (Temp / Rain / AQI); Wind can layer on top
+  const toggleTemperature = () => {
+    setShowTemperature((on) => {
+      if (on) return false
+      setShowRain(false)
+      setShowAqi(false)
+      return true
+    })
+  }
+
+  const toggleRain = () => {
+    setShowRain((on) => {
+      if (on) return false
+      setShowTemperature(false)
+      setShowAqi(false)
+      return true
+    })
+  }
+
+  const toggleAqi = () => {
+    setShowAqi((on) => {
+      if (on) return false
+      setShowTemperature(false)
+      setShowRain(false)
+      return true
+    })
+  }
+
+  const toggleWind = () => {
+    setShowWind((on) => !on)
+  }
+
+  const toggleSensorData = () => {
+    setShowSensorData((on) => !on)
   }
 
   const getMaxDate = () => {
@@ -1404,7 +1445,7 @@ const Dashboard = () => {
                 <div className="view-toggle-row view-toggle-row--layers">
                   <button
                     className={`view-toggle-button ${showTemperature ? 'active' : ''}`}
-                    onClick={() => setShowTemperature((on) => !on)}
+                    onClick={toggleTemperature}
                     title={showTemperature ? 'Hide temperature' : 'Show temperature on the map'}
                     type="button"
                   >
@@ -1415,7 +1456,7 @@ const Dashboard = () => {
                   </button>
                   <button
                     className={`view-toggle-button ${showRain ? 'active' : ''}`}
-                    onClick={() => setShowRain((on) => !on)}
+                    onClick={toggleRain}
                     title={showRain ? 'Hide rain' : 'Show rain on the map'}
                     type="button"
                   >
@@ -1427,7 +1468,7 @@ const Dashboard = () => {
                   </button>
                   <button
                     className={`view-toggle-button ${showWind ? 'active' : ''}`}
-                    onClick={() => setShowWind((on) => !on)}
+                    onClick={toggleWind}
                     title={showWind ? 'Hide wind' : 'Show wind on the map'}
                     type="button"
                   >
@@ -1440,7 +1481,7 @@ const Dashboard = () => {
                   </button>
                   <button
                     className={`view-toggle-button ${showAqi ? 'active' : ''}`}
-                    onClick={() => setShowAqi((on) => !on)}
+                    onClick={toggleAqi}
                     title={
                       showAqi
                         ? 'Hide AQI grid'
@@ -1460,6 +1501,24 @@ const Dashboard = () => {
                       <circle cx="12" cy="12" r="3"></circle>
                     </svg>
                     <span className="view-toggle-label">AQI</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${showSensorData ? 'active' : ''}`}
+                    onClick={toggleSensorData}
+                    title={
+                      showSensorData
+                        ? 'Hide nearby aqi.in sensors'
+                        : 'Show nearby aqi.in sensor data for the current map location'
+                    }
+                    type="button"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 3v3"></path>
+                      <path d="M12 18v3"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                      <path d="M5 8h3M16 8h3M5 16h3M16 16h3"></path>
+                    </svg>
+                    <span className="view-toggle-label">Sensor</span>
                   </button>
                   <div className="basemap-picker">
                     <button
@@ -1530,6 +1589,8 @@ const Dashboard = () => {
                 showTemperature={showTemperature}
                 showRain={showRain}
                 showAqi={showAqi}
+                showSensorData={showSensorData}
+                onToggleSensorData={toggleSensorData}
                 drawnGeometry={drawnGeometry}
                 uploadedKML={uploadedKML}
                 isDrawing={isDrawing}

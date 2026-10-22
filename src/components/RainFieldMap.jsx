@@ -3,21 +3,49 @@ import { createPortal } from 'react-dom'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { fetchHourlyWeatherData, fetchOpenMeteoRainForecast } from '../services/api'
+import { fieldViewKey, fixedGridPoints, softFromStep } from '../utils/weatherFieldGrid'
 
+// Windy-like "Rain, thunder" ramp (mm / 3h) — dry stays transparent
+const DRY_MM = 0.15
 const RAIN_STOPS = [
-  [0, [20, 90, 130]],
-  [1.5, [48, 170, 190]],
-  [3, [40, 168, 120]],
-  [7, [72, 196, 64]],
-  [10, [200, 210, 48]],
-  [20, [236, 160, 36]],
-  [30, [196, 48, 160]]
+  [0.15, [140, 200, 255]],
+  [0.5, [70, 170, 255]],
+  [1, [20, 200, 210]],
+  [2, [30, 210, 120]],
+  [4, [150, 230, 50]],
+  [8, [255, 220, 40]],
+  [15, [255, 140, 30]],
+  [25, [230, 45, 55]],
+  [40, [170, 40, 200]]
 ]
 
-const RAIN_LABELS = [0, 1.5, 3, 7, 10, 20, 30]
-const MAX_POINTS = 48
+const RAIN_LABELS = [0.15, 1, 2, 4, 8, 15, 25]
+// Higher budget than temp/wind so world zoom keeps enough cells to form a sheet
+const MAX_POINTS = 96
 const WINDOW_HOURS = 3
+const HEAT_W = 420
+const HEAT_H = 260
 const sampleCache = new Map()
+
+const smoothstep = (edge0, edge1, value) => {
+  const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)))
+  return t * t * (3 - 2 * t)
+}
+
+const rainColor = (rain) => {
+  if (rain == null || rain < DRY_MM) return null
+  const value = Math.max(DRY_MM, Math.min(40, rain))
+  let index = 1
+  while (index < RAIN_STOPS.length && RAIN_STOPS[index][0] < value) index += 1
+  const [startRain, start] = RAIN_STOPS[index - 1]
+  const [endRain, end] = RAIN_STOPS[Math.min(index, RAIN_STOPS.length - 1)]
+  const blend = endRain === startRain ? 0 : (value - startRain) / (endRain - startRain)
+  return [
+    Math.round(start[0] + (end[0] - start[0]) * blend),
+    Math.round(start[1] + (end[1] - start[1]) * blend),
+    Math.round(start[2] + (end[2] - start[2]) * blend)
+  ]
+}
 
 const todayDate = () => {
   const now = new Date()
@@ -30,51 +58,6 @@ const finiteOrNull = (value) => {
   if (value === null || value === undefined || value === '') return null
   const number = Number(value)
   return Number.isFinite(number) ? number : null
-}
-
-const snap = (value, step) => Math.round(value / step) * step
-
-const stepForZoom = (zoom) => {
-  if (zoom < 5) return 2
-  if (zoom < 7) return 1
-  if (zoom < 9) return 0.5
-  return 0.25
-}
-
-const gridPoints = (bounds, zoom) => {
-  let step = stepForZoom(zoom)
-  const build = (cell) => {
-    const south = snap(bounds.getSouth(), cell) - cell
-    const north = snap(bounds.getNorth(), cell) + cell
-    const west = snap(bounds.getWest(), cell) - cell
-    const east = snap(bounds.getEast(), cell) + cell
-    const points = []
-    const seen = new Set()
-    for (let lat = south; lat <= north + cell * 0.01; lat += cell) {
-      for (let lng = west; lng <= east + cell * 0.01; lng += cell) {
-        const point = {
-          lat: Math.round(lat * 1000) / 1000,
-          lng: Math.round(lng * 1000) / 1000
-        }
-        const key = `${point.lat}:${point.lng}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        points.push(point)
-      }
-    }
-    return points
-  }
-
-  let points = build(step)
-  while (points.length > MAX_POINTS && step < 4) {
-    step *= 2
-    points = build(step)
-  }
-  if (points.length > MAX_POINTS) {
-    const stride = Math.ceil(points.length / MAX_POINTS)
-    points = points.filter((_, index) => index % stride === 0).slice(0, MAX_POINTS)
-  }
-  return { points, step }
 }
 
 const parseBackendSeries = (records) => {
@@ -149,31 +132,21 @@ const rainForMode = (series, mode) => {
   return fallback == null ? 0 : fallback
 }
 
-const rainColor = (rain) => {
-  if (rain == null) return null
-  const value = Math.max(0, Math.min(30, rain))
-  let index = 1
-  while (index < RAIN_STOPS.length && RAIN_STOPS[index][0] < value) index += 1
-  const [startRain, start] = RAIN_STOPS[index - 1]
-  const [endRain, end] = RAIN_STOPS[Math.min(index, RAIN_STOPS.length - 1)]
-  const blend = endRain === startRain ? 0 : (value - startRain) / (endRain - startRain)
-  return [
-    Math.round(start[0] + (end[0] - start[0]) * blend),
-    Math.round(start[1] + (end[1] - start[1]) * blend),
-    Math.round(start[2] + (end[2] - start[2]) * blend)
-  ]
-}
-
-const sampleField = (field, lat, lng, soft = 0.12) => {
+const sampleField = (field, lat, lng, soft = 0.14) => {
   if (!field.length) return 0
   let rain = 0
   let weightTotal = 0
   const cos = Math.cos((lat * Math.PI) / 180)
+  // Wider reach than one cell so coarse (world) lattices merge into a sheet
+  const sigma = Math.max(0.1, soft)
+  const reach = sigma * 4.8
   field.forEach((point) => {
     if (point.rain == null) return
     const dLat = lat - point.lat
     const dLng = (lng - point.lng) * cos
-    const weight = 1 / (dLat * dLat + dLng * dLng + soft)
+    const dist2 = dLat * dLat + dLng * dLng
+    if (dist2 > reach * reach) return
+    const weight = Math.exp(-dist2 / (2 * sigma * sigma))
     rain += point.rain * weight
     weightTotal += weight
   })
@@ -199,8 +172,8 @@ const RainFieldMap = () => {
     tip.style.display = 'none'
     const ctx = canvas.getContext('2d')
     const heat = document.createElement('canvas')
-    heat.width = 220
-    heat.height = 140
+    heat.width = HEAT_W
+    heat.height = HEAT_H
     const heatCtx = heat.getContext('2d', { willReadFrequently: true })
     const fieldRef = { current: [] }
     let alive = true
@@ -210,7 +183,9 @@ const RainFieldMap = () => {
     let dirty = true
     let pixelWidth = 0
     let pixelHeight = 0
-    let soft = 0.12
+    let soft = 0.14
+    let latticeStep = 0.5
+    let lastViewKey = ''
 
     const unitLabel = () => (
       modeRef.current === 'forecast' ? 'mm · next 3h' : 'mm · last 3h'
@@ -235,28 +210,65 @@ const RainFieldMap = () => {
       return size
     }
 
+    // After maxPoints thinning, neighbors can be far apart — use real spacing,
+    // not latticeStep, or world view paints isolated circles around each cell.
+    const spacingFromField = (field) => {
+      if (field.length < 3) return Math.max(latticeStep, 1)
+      let total = 0
+      let count = 0
+      const probes = Math.min(field.length, 28)
+      for (let i = 0; i < probes; i += 1) {
+        const a = field[(i * 11) % field.length]
+        let best = Infinity
+        for (let j = 0; j < field.length; j += 1) {
+          const b = field[j]
+          if (a === b) continue
+          const dLat = a.lat - b.lat
+          const dLng = (a.lng - b.lng) * Math.cos((a.lat * Math.PI) / 180)
+          const dist = Math.hypot(dLat, dLng)
+          if (dist > 0.05 && dist < best) best = dist
+        }
+        if (best < Infinity) {
+          total += best
+          count += 1
+        }
+      }
+      return count ? total / count : Math.max(latticeStep, 1)
+    }
+
+    const paintSoftForField = (field) => {
+      const spacing = spacingFromField(field)
+      // ~0.7× neighbor distance → cells merge into a continuous sheet
+      return Math.max(0.2, Math.min(8, spacing * 0.72))
+    }
+
+    let paintSoft = 0.3
+
     const paintHeat = (size) => {
       const field = fieldRef.current
-      const image = heatCtx.createImageData(heat.width, heat.height)
+      const image = heatCtx.createImageData(HEAT_W, HEAT_H)
       const pixels = image.data
-      for (let y = 0; y < heat.height; y += 1) {
-        for (let x = 0; x < heat.width; x += 1) {
+      paintSoft = paintSoftForField(field)
+
+      for (let y = 0; y < HEAT_H; y += 1) {
+        for (let x = 0; x < HEAT_W; x += 1) {
           const latLng = map.containerPointToLatLng([
-            ((x + 0.5) * size.x) / heat.width,
-            ((y + 0.5) * size.y) / heat.height
+            ((x + 0.5) * size.x) / HEAT_W,
+            ((y + 0.5) * size.y) / HEAT_H
           ])
-          const rain = sampleField(field, latLng.lat, latLng.lng, soft)
+          const rain = sampleField(field, latLng.lat, latLng.lng, paintSoft)
+          const offset = (y * HEAT_W + x) * 4
           const color = rainColor(rain)
-          const offset = (y * heat.width + x) * 4
           if (!color) {
             pixels[offset + 3] = 0
             continue
           }
-          const strength = Math.min(1, rain / 8)
+          const edge = smoothstep(DRY_MM, DRY_MM + 1.1, rain)
+          const body = 0.3 + smoothstep(DRY_MM, 18, rain) * 0.4
           pixels[offset] = color[0]
           pixels[offset + 1] = color[1]
           pixels[offset + 2] = color[2]
-          pixels[offset + 3] = Math.round(185 + strength * 60)
+          pixels[offset + 3] = Math.round(edge * body * 255)
         }
       }
       heatCtx.putImageData(image, 0, 0)
@@ -283,14 +295,31 @@ const RainFieldMap = () => {
       return field
     }
 
+    const mergeField = (bounds, step) => {
+      const pad = Math.max(step * 2.5, 1)
+      const samples = buildField(bounds, pad)
+      if (!samples.length) return false
+      const south = bounds.getSouth() - pad
+      const north = bounds.getNorth() + pad
+      const west = bounds.getWest() - pad
+      const east = bounds.getEast() + pad
+      const byKey = new Map()
+      // Keep prior samples that still sit near the view (resize must not drop them)
+      fieldRef.current.forEach((point) => {
+        if (point.lat < south || point.lat > north || point.lng < west || point.lng > east) return
+        byKey.set(`${point.lat}:${point.lng}`, point)
+      })
+      samples.forEach((point) => {
+        byKey.set(`${point.lat}:${point.lng}`, point)
+      })
+      fieldRef.current = [...byKey.values()]
+      dirty = true
+      setStatus('ready')
+      return fieldRef.current.length > 0
+    }
+
     const applyField = (bounds, step) => {
-      const samples = buildField(bounds, Math.max(step * 2, 1))
-      if (samples.length) {
-        fieldRef.current = samples
-        dirty = true
-        setStatus('ready')
-        return true
-      }
+      if (mergeField(bounds, step)) return true
       if (!fieldRef.current.length) setStatus('empty')
       return false
     }
@@ -318,13 +347,25 @@ const RainFieldMap = () => {
       }
     }
 
-    const loadField = async () => {
-      const id = generation + 1
-      generation = id
+    const loadField = async (force = false) => {
       const bounds = map.getBounds()
       const zoom = map.getZoom()
-      const { points, step } = gridPoints(bounds, zoom)
-      soft = Math.max(0.04, (step * step) / 8)
+      const { points, step } = fixedGridPoints(bounds, zoom, MAX_POINTS)
+      const viewKey = `${modeRef.current}:${fieldViewKey(bounds, zoom, step)}`
+      // Same center/zoom (e.g. window resize): keep lattice, only refresh paint.
+      if (!force && viewKey === lastViewKey && fieldRef.current.length) {
+        latticeStep = step
+        soft = Math.max(0.1, softFromStep(step))
+        mergeField(bounds, step)
+        dirty = true
+        return
+      }
+      lastViewKey = viewKey
+
+      const id = generation + 1
+      generation = id
+      latticeStep = step
+      soft = Math.max(0.1, softFromStep(step))
       if (!fieldRef.current.length) setStatus('loading')
 
       const jobs = []
@@ -354,33 +395,50 @@ const RainFieldMap = () => {
     const rebuildFromCache = () => {
       fieldRef.current = []
       dirty = true
+      lastViewKey = ''
       setStatus('loading')
       const bounds = map.getBounds()
       const zoom = map.getZoom()
-      const { step } = gridPoints(bounds, zoom)
-      soft = Math.max(0.04, (step * step) / 8)
-      if (applyField(bounds, step)) return
-      loadField()
+      const { step } = fixedGridPoints(bounds, zoom, MAX_POINTS)
+      latticeStep = step
+      soft = Math.max(0.1, softFromStep(step))
+      if (applyField(bounds, step)) {
+        lastViewKey = `${modeRef.current}:${fieldViewKey(bounds, zoom, step)}`
+        return
+      }
+      loadField(true)
     }
 
     const tick = () => {
       if (!alive) return
       frameId = requestAnimationFrame(tick)
       const size = syncCanvas()
+      const field = fieldRef.current
       ctx.clearRect(0, 0, size.x, size.y)
-      if (!fieldRef.current.length) return
+      if (!field.length) return
+
       if (dirty) {
         paintHeat(size)
         dirty = false
       }
+
       ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = 'high'
+      // More blur when samples are sparse (world load) so circles fuse visually
+      const blurPx = paintSoft >= 3 ? 3.2 : paintSoft >= 1.2 ? 2 : 0.7
+      ctx.filter = `blur(${blurPx}px)`
+      ctx.globalAlpha = 0.92
       ctx.drawImage(heat, 0, 0, size.x, size.y)
+      ctx.filter = 'none'
+      ctx.globalAlpha = 1
     }
 
+    // Pan/zoom animation: repaint only. Resize must not rebuild the sample set.
     const markDirty = () => { dirty = true }
+    const onResize = () => { dirty = true }
     const scheduleLoad = () => {
       clearTimeout(timer)
-      timer = window.setTimeout(loadField, 450)
+      timer = window.setTimeout(() => loadField(false), 400)
     }
 
     const onMouseMove = (event) => {
@@ -389,8 +447,10 @@ const RainFieldMap = () => {
         tip.style.display = 'none'
         return
       }
-      const rain = sampleField(field, event.latlng.lat, event.latlng.lng, soft)
-      tip.textContent = `${rain.toFixed(1)} ${unitLabel()}`
+      const rain = sampleField(field, event.latlng.lat, event.latlng.lng, paintSoft || soft)
+      tip.textContent = rain < DRY_MM
+        ? `Dry · ${unitLabel()}`
+        : `${rain.toFixed(1)} ${unitLabel()}`
       tip.style.display = 'block'
       const point = map.mouseEventToContainerPoint(event.originalEvent)
       tip.style.left = `${point.x + 14}px`
@@ -409,13 +469,13 @@ const RainFieldMap = () => {
     frameId = requestAnimationFrame(tick)
     map.on('move', markDirty)
     map.on('zoom', markDirty)
-    map.on('resize', markDirty)
+    map.on('resize', onResize)
     map.on('moveend', scheduleLoad)
     map.on('zoomend', scheduleLoad)
     map.on('mousemove', onMouseMove)
     map.on('mouseout', onMouseOut)
     map.getContainer().addEventListener('rain-mode', onModeChange)
-    loadField()
+    loadField(true)
 
     return () => {
       alive = false
@@ -424,7 +484,7 @@ const RainFieldMap = () => {
       cancelAnimationFrame(frameId)
       map.off('move', markDirty)
       map.off('zoom', markDirty)
-      map.off('resize', markDirty)
+      map.off('resize', onResize)
       map.off('moveend', scheduleLoad)
       map.off('zoomend', scheduleLoad)
       map.off('mousemove', onMouseMove)
@@ -442,7 +502,7 @@ const RainFieldMap = () => {
   }, [map, mode])
 
   return createPortal(
-    <div className="rain-scale">
+    <div className="weather-scale rain-scale">
       <div className="rain-mode-toggle" role="group" aria-label="Rain time mode">
         <button
           type="button"
@@ -459,16 +519,24 @@ const RainFieldMap = () => {
           Forecast
         </button>
       </div>
-      {status === 'loading' && <span className="regional-wind-scale-note">Loading rain…</span>}
-      {status === 'empty' && <span className="regional-wind-scale-note">Rain is unavailable</span>}
+      {status === 'loading' && <span className="weather-scale-note">Loading rain…</span>}
+      {status === 'empty' && <span className="weather-scale-note">Rain unavailable</span>}
       {status === 'ready' && (
         <>
-          <span className="rain-scale-unit">
-            {mode === 'forecast' ? 'mm · next 3h' : 'mm · last 3h'}
+          <span className="weather-scale-title">Rain</span>
+          <span className="weather-scale-unit rain-scale-unit">
+            {mode === 'forecast' ? 'mm · 3h' : 'mm · 3h'}
           </span>
-          <div className="rain-scale-bar">
+          <div
+            className="weather-scale-bar rain-scale-bar"
+            style={{
+              background: 'linear-gradient(90deg, #8cc8ff 0%, #46aaff 12%, #14c8d2 26%, #1ed278 40%, #96e632 55%, #ffdc28 70%, #ff8c1e 85%, #e62d37 100%)'
+            }}
+          >
             {RAIN_LABELS.map((value) => (
-              <span key={value} style={{ left: `${(value / 30) * 100}%` }}>{value}</span>
+              <span key={value} style={{ left: `${((value - DRY_MM) / (25 - DRY_MM)) * 100}%` }}>
+                {value}
+              </span>
             ))}
           </div>
         </>

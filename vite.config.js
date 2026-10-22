@@ -17,6 +17,12 @@ export default defineConfig({
         changeOrigin: true,
         secure: true,
         rewrite: (path) => path.replace(/^\/open-meteo/, '')
+      },
+      '/aqi-in': {
+        target: 'https://apiserver.aqi.in',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/aqi-in/, '')
       }
     }
   }
