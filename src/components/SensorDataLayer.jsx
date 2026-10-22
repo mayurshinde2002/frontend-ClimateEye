@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CircleMarker, Popup, useMap } from 'react-leaflet'
-import { aqiInColor, aqiInLabel, fetchSensorBundle } from '../services/aqiInApi'
+import { CircleMarker, Popup, useMap, useMapEvents } from 'react-leaflet'
+import { aqiInColor, aqiInLabel, fetchSensorsInView } from '../services/aqiInApi'
 import { useLeafletSafeOverlay } from '../hooks/useLeafletSafeOverlay'
 import AqiRankingsPanel from './AqiRankingsPanel'
 import './SensorDataLayer.css'
@@ -17,55 +17,79 @@ const stationAqi = (station) => (
   ?? finite(station?.aqi)
 )
 
-const SensorDataLayer = ({ latitude, longitude, onClose }) => {
+const viewKeyFromMap = (map) => {
+  const bounds = map.getBounds()
+  const zoom = map.getZoom()
+  const step = zoom >= 9 ? 0.15 : zoom >= 7 ? 0.35 : zoom >= 5 ? 0.75 : 1.5
+  const snap = (value) => Math.round(value / step) * step
+  return [
+    zoom | 0,
+    snap(bounds.getSouth()),
+    snap(bounds.getNorth()),
+    snap(bounds.getWest()),
+    snap(bounds.getEast())
+  ].join(':')
+}
+
+const SensorDataLayer = ({ onClose }) => {
   const map = useMap()
   const panelRef = useRef(null)
   useLeafletSafeOverlay(panelRef)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [bundle, setBundle] = useState(null)
-  const [activeUid, setActiveUid] = useState(null)
+  const [stations, setStations] = useState([])
+  const [selected, setSelected] = useState(null)
   const [rankingsOpen, setRankingsOpen] = useState(false)
+  const [viewKey, setViewKey] = useState(() => viewKeyFromMap(map))
+  const requestIdRef = useRef(0)
 
-  const latKey = Number(latitude?.toFixed?.(3) ?? latitude)
-  const lngKey = Number(longitude?.toFixed?.(3) ?? longitude)
+  useMapEvents({
+    moveend: () => setViewKey(viewKeyFromMap(map)),
+    zoomend: () => setViewKey(viewKeyFromMap(map))
+  })
 
   useEffect(() => {
-    if (!Number.isFinite(latKey) || !Number.isFinite(lngKey)) return undefined
-
+    if (!viewKey) return undefined
     let cancelled = false
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
     setLoading(true)
     setError(null)
 
     const timer = window.setTimeout(() => {
-      fetchSensorBundle(latKey, lngKey)
+      const bounds = map.getBounds()
+      const zoom = map.getZoom()
+
+      fetchSensorsInView(bounds, zoom, (payload) => {
+        if (cancelled || requestIdRef.current !== requestId) return
+        const list = payload.stations || []
+        setStations(list)
+        // Keep selection only if that sensor is still in the current view
+        setSelected((prev) => {
+          if (!prev) return null
+          return list.find((item) => item.uid === prev.uid) || null
+        })
+        if (payload.done) setLoading(false)
+      })
         .then((data) => {
-          if (cancelled) return
-          setBundle(data)
-          setActiveUid(data.stations?.[0]?.uid || data.city?.uid || null)
+          if (cancelled || requestIdRef.current !== requestId) return
+          setStations(data.stations || [])
+          setLoading(false)
         })
         .catch((err) => {
-          if (cancelled) return
-          setBundle(null)
-          setError(err.message || 'Could not load sensor data')
+          if (cancelled || requestIdRef.current !== requestId) return
+          setError(err.message || 'Could not load sensors for this view')
+          setLoading(false)
         })
-        .finally(() => {
-          if (!cancelled) setLoading(false)
-        })
-    }, 350)
+    }, 280)
 
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [latKey, lngKey])
+  }, [map, viewKey])
 
-  const stations = bundle?.stations || []
-  const active = useMemo(
-    () => stations.find((item) => item.uid === activeUid) || stations[0] || bundle?.city || null,
-    [stations, activeUid, bundle?.city]
-  )
-  const activeScore = stationAqi(active)
+  const activeScore = stationAqi(selected)
   const categoryColor = aqiInColor(activeScore)
   const categoryLabel = aqiInLabel(activeScore)
 
@@ -77,6 +101,10 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
     }
   }
 
+  const selectStation = (station) => {
+    setSelected(station)
+  }
+
   return (
     <>
       {stations.map((station) => {
@@ -85,20 +113,20 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
         if (lat == null || lng == null) return null
         const score = stationAqi(station)
         const color = aqiInColor(score)
-        const selected = station.uid === active?.uid
+        const isSelected = selected?.uid === station.uid
         return (
           <CircleMarker
             key={station.uid || `${lat}-${lng}`}
             center={[lat, lng]}
-            radius={selected ? 11 : 8}
+            radius={isSelected ? 10 : 6}
             pathOptions={{
               color: '#ffffff',
-              weight: selected ? 3 : 2,
+              weight: isSelected ? 3 : 1.5,
               fillColor: color,
               fillOpacity: 0.92
             }}
             eventHandlers={{
-              click: () => setActiveUid(station.uid)
+              click: () => selectStation(station)
             }}
           >
             <Popup>
@@ -106,7 +134,7 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
                 <strong>{station.location || station.station || station.city || 'Sensor'}</strong>
                 <div>AQI-IN: {score ?? '—'}</div>
                 <div>{station.city}{station.state ? `, ${station.state}` : ''}</div>
-                {station.distance != null && <div>{Number(station.distance).toFixed(1)} km away</div>}
+                <div className="sensor-popup-hint">Click marker to open details</div>
               </div>
             </Popup>
           </CircleMarker>
@@ -117,7 +145,7 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
         <>
           <div
             ref={panelRef}
-            className="sensor-data-panel leaflet-control"
+            className="sensor-data-panel sensor-data-panel--selected leaflet-control"
             onWheel={(event) => event.stopPropagation()}
             onMouseDown={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
@@ -127,7 +155,7 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
               <div className="sensor-data-heading">
                 <span className="sensor-data-title">Sensor data</span>
                 <span className="sensor-data-sub">
-                  aqi.in · {latKey.toFixed(3)}, {lngKey.toFixed(3)}
+                  {selected ? 'Selected from map' : 'Click a sensor on the map'}
                 </span>
               </div>
               <div className="sensor-data-header-actions">
@@ -135,12 +163,12 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
                   type="button"
                   className={`sensor-rankings-btn${rankingsOpen ? ' active' : ''}`}
                   onClick={() => setRankingsOpen((open) => !open)}
-                  title="World AQI rankings"
+                  title="India AQI city rankings"
                 >
                   Rankings
                 </button>
-                {loading && <span className="sensor-data-status">Loading…</span>}
-                {!loading && activeScore != null && (
+                {loading && !selected && <span className="sensor-data-status">Loading map…</span>}
+                {selected && activeScore != null && (
                   <span className="sensor-data-badge" style={{ color: categoryColor }}>
                     {categoryLabel}
                   </span>
@@ -155,19 +183,20 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
 
             {error && <p className="sensor-data-error">{error}</p>}
 
-            {!error && !loading && !stations.length && (
-              <p className="sensor-data-empty">No nearby sensors for this location.</p>
+            {!selected && !error && (
+              <p className="sensor-data-empty">
+                Select any coloured marker on the map to view its AQI and pollutant details here.
+              </p>
             )}
 
-            {active && (
+            {selected && (
               <div className="sensor-data-active">
                 <div className="sensor-data-active-name">
-                  {active.location || active.station || active.city || 'Nearest sensor'}
+                  {selected.location || selected.station || selected.city || 'Sensor'}
                 </div>
                 <div className="sensor-data-active-meta">
-                  {active.city}{active.state ? `, ${active.state}` : ''}
-                  {active.distance != null ? ` · ${Number(active.distance).toFixed(1)} km` : ''}
-                  {active.isOnline != null ? (active.isOnline ? ' · Online' : ' · Offline') : ''}
+                  {selected.city}{selected.state ? `, ${selected.state}` : ''}
+                  {selected.isOnline != null ? (selected.isOnline ? ' · Online' : ' · Offline') : ''}
                 </div>
                 <div className="sensor-data-score" style={{ color: categoryColor }}>
                   <span className="sensor-data-score-value">{activeScore ?? '—'}</span>
@@ -175,12 +204,12 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
                 </div>
                 <div className="sensor-data-grid">
                   {[
-                    ['PM2.5', active.iaqi?.pm25],
-                    ['PM10', active.iaqi?.pm10],
-                    ['NO₂', active.iaqi?.no2],
-                    ['SO₂', active.iaqi?.so2],
-                    ['O₃', active.iaqi?.o3],
-                    ['CO', active.iaqi?.co]
+                    ['PM2.5', selected.iaqi?.pm25],
+                    ['PM10', selected.iaqi?.pm10],
+                    ['NO₂', selected.iaqi?.no2],
+                    ['SO₂', selected.iaqi?.so2],
+                    ['O₃', selected.iaqi?.o3],
+                    ['CO', selected.iaqi?.co]
                   ].map(([label, value]) => (
                     <div key={label} className="sensor-data-cell">
                       <span>{label}</span>
@@ -188,48 +217,26 @@ const SensorDataLayer = ({ latitude, longitude, onClose }) => {
                     </div>
                   ))}
                 </div>
-                {active.weather?.temp_c != null && (
+                {selected.weather?.temp_c != null && (
                   <div className="sensor-data-weather">
-                    {active.weather.temp_c}°C
-                    {active.weather.condition?.text ? ` · ${active.weather.condition.text}` : ''}
-                    {active.weather.humidity != null ? ` · RH ${active.weather.humidity}%` : ''}
+                    {selected.weather.temp_c}°C
+                    {selected.weather.condition?.text ? ` · ${selected.weather.condition.text}` : ''}
+                    {selected.weather.humidity != null ? ` · RH ${selected.weather.humidity}%` : ''}
                   </div>
                 )}
-                {active.updated_at && (
+                {selected.updated_at && (
                   <div className="sensor-data-updated">
-                    Updated {String(active.updated_at).replace('T', ' ').replace('.000Z', ' UTC')}
+                    Updated {String(selected.updated_at).replace('T', ' ').replace('.000Z', ' UTC')}
                   </div>
                 )}
+                <button
+                  type="button"
+                  className="sensor-data-clear-selection"
+                  onClick={() => setSelected(null)}
+                >
+                  Clear selection
+                </button>
               </div>
-            )}
-
-            {stations.length > 1 && (
-              <ul className="sensor-data-list">
-                {stations.map((station) => {
-                  const score = stationAqi(station)
-                  return (
-                    <li key={station.uid}>
-                      <button
-                        type="button"
-                        className={`sensor-data-list-item${station.uid === active?.uid ? ' active' : ''}`}
-                        onClick={() => setActiveUid(station.uid)}
-                      >
-                        <span
-                          className="sensor-data-dot"
-                          style={{ background: aqiInColor(score) }}
-                        />
-                        <span className="sensor-data-list-text">
-                          <strong>{station.location || station.city || station.uid}</strong>
-                          <small>
-                            {score ?? '—'} AQI
-                            {station.distance != null ? ` · ${Number(station.distance).toFixed(1)} km` : ''}
-                          </small>
-                        </span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
             )}
           </div>
 

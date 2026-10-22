@@ -97,6 +97,190 @@ export const fetchSensorBundle = async (latitude, longitude) => {
   }
 }
 
+// Persist discovered sensors across pan/zoom so the view fills over time
+const sensorStationCache = new Map()
+const queriedSampleCells = new Set()
+
+const stationUid = (station) => (
+  station?.uid
+  || station?.locationId
+  || (Number.isFinite(Number(station?.latitude)) && Number.isFinite(Number(station?.longitude))
+    ? `${Number(station.latitude).toFixed(4)}:${Number(station.longitude).toFixed(4)}`
+    : null)
+)
+
+const sampleCellKey = (lat, lng, cell) => (
+  `${Math.round(lat / cell) * cell}:${Math.round(lng / cell) * cell}`
+)
+
+/**
+ * Dense sample lattice sized to the visible span (capped) so nearest-station
+ * queries can discover sensors across the whole screen, not one cluster.
+ */
+const sampleGridInBounds = (bounds, zoom) => {
+  const south = bounds.getSouth()
+  const north = bounds.getNorth()
+  const west = bounds.getWest()
+  const east = bounds.getEast()
+  const latSpan = Math.max(0.05, north - south)
+  const lngSpan = Math.max(0.05, east - west)
+
+  // Geographic step: finer when zoomed in / smaller view
+  let cell = 2.4
+  if (zoom >= 11) cell = 0.12
+  else if (zoom >= 9) cell = 0.25
+  else if (zoom >= 7) cell = 0.55
+  else if (zoom >= 6) cell = 0.9
+  else if (zoom >= 5) cell = 1.4
+  else if (zoom >= 4) cell = 2.0
+
+  let cols = Math.ceil(lngSpan / cell) + 1
+  let rows = Math.ceil(latSpan / cell) + 1
+  // Hard cap request count (still much denser than 3×3)
+  const maxPoints = zoom >= 8 ? 64 : zoom >= 6 ? 49 : 36
+  while (cols * rows > maxPoints) {
+    if (cols >= rows) cols -= 1
+    else rows -= 1
+  }
+  cols = Math.max(3, cols)
+  rows = Math.max(3, rows)
+
+  const points = []
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      // Slight row stagger improves discovery vs perfect grid
+      const stagger = (r % 2) * (0.5 / cols)
+      const lat = south + ((r + 0.5) / rows) * latSpan
+      const lng = west + ((c + 0.5 + stagger) / cols) * lngSpan
+      const point = {
+        lat: Math.round(lat * 10000) / 10000,
+        lng: Math.round(lng * 10000) / 10000,
+        cell
+      }
+      const key = sampleCellKey(point.lat, point.lng, cell)
+      point.key = key
+      points.push(point)
+    }
+  }
+  return points
+}
+
+const inBounds = (lat, lng, bounds, padRatio = 0.08) => {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false
+  const south = bounds.getSouth()
+  const north = bounds.getNorth()
+  const west = bounds.getWest()
+  const east = bounds.getEast()
+  const padLat = (north - south) * padRatio
+  const padLng = (east - west) * padRatio
+  return (
+    lat >= south - padLat &&
+    lat <= north + padLat &&
+    lng >= west - padLng &&
+    lng <= east + padLng
+  )
+}
+
+const stationsInBounds = (bounds) => (
+  [...sensorStationCache.values()]
+    .filter((station) => inBounds(
+      Number(station.latitude),
+      Number(station.longitude),
+      bounds,
+      0.08
+    ))
+    .sort((a, b) => {
+      const aqiA = Number(a?.iaqi?.['AQI-IN'] ?? a?.iaqi?.aqi ?? a?.aqi) || 0
+      const aqiB = Number(b?.iaqi?.['AQI-IN'] ?? b?.iaqi?.aqi ?? b?.aqi) || 0
+      return aqiB - aqiA
+    })
+)
+
+const rememberStations = (items) => {
+  let added = 0
+  ;(items || []).forEach((station) => {
+    const uid = stationUid(station)
+    if (!uid) return
+    if (!sensorStationCache.has(uid)) added += 1
+    sensorStationCache.set(uid, station)
+  })
+  return added
+}
+
+/**
+ * Discover sensors for the visible map by dense nearest-location sampling.
+ * aqi.in has no bbox station API — cache + dense grid approximates full coverage.
+ * @param {(payload: { stations: any[], done: boolean, sampleCount: number, fetched: number }) => void} [onProgress]
+ */
+export const fetchSensorsInView = async (bounds, zoom = 5, onProgress) => {
+  if (!bounds?.getSouth) {
+    throw new Error('Map bounds are required')
+  }
+
+  // Immediately paint anything already cached in this view
+  const initial = stationsInBounds(bounds)
+  onProgress?.({
+    stations: initial,
+    done: false,
+    sampleCount: 0,
+    fetched: 0
+  })
+
+  const samples = sampleGridInBounds(bounds, zoom)
+  // Prefer cells not queried yet so pan/zoom discovers new areas first
+  const ordered = [
+    ...samples.filter((point) => !queriedSampleCells.has(point.key)),
+    ...samples.filter((point) => queriedSampleCells.has(point.key))
+  ]
+
+  let cursor = 0
+  let fetched = 0
+  const workers = Math.min(6, Math.max(3, ordered.length))
+
+  const worker = async () => {
+    while (cursor < ordered.length) {
+      const index = cursor
+      cursor += 1
+      const point = ordered[index]
+      try {
+        const result = await fetchNearestLocation(
+          point.lat,
+          point.lng,
+          AQI_IN_TYPES.STATION
+        )
+        queriedSampleCells.add(point.key)
+        rememberStations(result.items)
+        fetched += 1
+        onProgress?.({
+          stations: stationsInBounds(bounds),
+          done: false,
+          sampleCount: ordered.length,
+          fetched
+        })
+      } catch {
+        fetched += 1
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workers }, () => worker()))
+
+  const stations = stationsInBounds(bounds)
+  onProgress?.({
+    stations,
+    done: true,
+    sampleCount: ordered.length,
+    fetched
+  })
+
+  return {
+    stations,
+    sampleCount: ordered.length,
+    cacheSize: sensorStationCache.size,
+    fetchedAt: new Date().toISOString()
+  }
+}
+
 /**
  * City / country AQI ranking list.
  * Query (GET): sensorname, type (2 = cities), limit, source

@@ -465,11 +465,7 @@ const MapComponent = ({
         {showAqi && <AQIGridMap geometry={aqiGeometry} />}
 
         {showSensorData && (
-          <SensorDataLayer
-            latitude={focusPoint.latitude}
-            longitude={focusPoint.longitude}
-            onClose={onToggleSensorData}
-          />
+          <SensorDataLayer onClose={onToggleSensorData} />
         )}
 
         {searchedPlace && (
