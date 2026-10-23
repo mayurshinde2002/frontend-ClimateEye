@@ -370,6 +370,92 @@ export const fetchTopCitiesRanklist = (limit = 30) => (
   })
 )
 
+/** Numeric AQI from an aqi.in station / city payload. */
+export const stationAqiValue = (station) => {
+  const value = Number(
+    station?.iaqi?.['AQI-IN']
+    ?? station?.iaqi?.aqi
+    ?? station?.aqi
+    ?? station?.AQI
+  )
+  return Number.isFinite(value) ? value : null
+}
+
+/**
+ * Leaflet-like bounds from a { west, south, east, north } bbox
+ * (for reuse with fetchSensorsInView without a map instance).
+ */
+export const boundsFromBbox = (bbox, padRatio = 0.12) => {
+  if (!bbox) return null
+  const latPad = Math.max(0.01, (bbox.north - bbox.south) * padRatio)
+  const lngPad = Math.max(0.01, (bbox.east - bbox.west) * padRatio)
+  const south = bbox.south - latPad
+  const north = bbox.north + latPad
+  const west = bbox.west - lngPad
+  const east = bbox.east + lngPad
+  return {
+    getSouth: () => south,
+    getNorth: () => north,
+    getWest: () => west,
+    getEast: () => east
+  }
+}
+
+/**
+ * Discover aqi.in stations around a drawn area bbox and return paint samples.
+ * Uses real per-sensor AQI (varies by location) instead of a single city reading.
+ */
+export const fetchAqiSamplesForArea = async (bbox, onProgress) => {
+  const bounds = boundsFromBbox(bbox, 0.15)
+  if (!bounds) throw new Error('Area bounds are required')
+
+  const latSpan = bounds.getNorth() - bounds.getSouth()
+  const lngSpan = bounds.getEast() - bounds.getWest()
+  // City / neighborhood draws → denser discovery zoom
+  const span = Math.max(latSpan, lngSpan)
+  const zoom = span < 0.08 ? 12 : span < 0.2 ? 11 : span < 0.5 ? 10 : 8
+
+  const result = await fetchSensorsInView(bounds, zoom, (progress) => {
+    const samples = (progress.stations || [])
+      .map((station) => {
+        const lat = Number(station.latitude)
+        const lng = Number(station.longitude)
+        const aqi = stationAqiValue(station)
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || aqi == null) return null
+        return {
+          lat,
+          lng,
+          aqi,
+          name: station.location || station.city || station.location_slug || 'Sensor'
+        }
+      })
+      .filter(Boolean)
+    onProgress?.({
+      samples,
+      done: Boolean(progress.done),
+      fetched: progress.fetched || 0,
+      sampleCount: progress.sampleCount || 0
+    })
+  })
+
+  const samples = (result.stations || [])
+    .map((station) => {
+      const lat = Number(station.latitude)
+      const lng = Number(station.longitude)
+      const aqi = stationAqiValue(station)
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || aqi == null) return null
+      return {
+        lat,
+        lng,
+        aqi,
+        name: station.location || station.city || station.location_slug || 'Sensor'
+      }
+    })
+    .filter(Boolean)
+
+  return { samples, zoom }
+}
+
 export const aqiInColor = (aqi) => {
   const value = Number(aqi)
   if (!Number.isFinite(value)) return '#94a3b8'

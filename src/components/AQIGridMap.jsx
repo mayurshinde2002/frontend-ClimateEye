@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { fetchAQIData } from '../services/api'
+import { fetchAqiSamplesForArea } from '../services/aqiInApi'
 import { pointInGeometry } from '../utils/polygonIndex'
 import './AQIGridMap.css'
 
 const METERS_PER_DEG_LAT = 111320
-const BATCH_SIZE = 8
-const MAX_CELLS = 200
+const BATCH_SIZE = 12
+const MAX_BBOX_SLOTS = 900
+const MAX_FETCH_CELLS = 80
+const CELL_SIZE_OPTIONS_M = [50, 70, 100, 125, 150, 200, 250, 300, 400, 500]
 
 // Smooth AQI ramp (matches category bands, blended for heatmap)
 const AQI_STOPS = [
@@ -55,12 +58,28 @@ const bboxOfGeometry = (geometry) => {
 }
 
 const pickCellMeters = (widthM, heightM) => {
-  for (const size of [50, 70, 100, 150, 200, 250]) {
+  for (const size of CELL_SIZE_OPTIONS_M) {
     const cols = Math.max(1, Math.ceil(widthM / size))
     const rows = Math.max(1, Math.ceil(heightM / size))
-    if (cols * rows <= MAX_CELLS) return size
+    if (cols * rows <= MAX_BBOX_SLOTS) return size
   }
-  return 300
+  return CELL_SIZE_OPTIONS_M[CELL_SIZE_OPTIONS_M.length - 1]
+}
+
+const thinCells = (cells, limit) => {
+  if (cells.length <= limit) return cells
+  const stride = Math.ceil(cells.length / limit)
+  const picked = []
+  for (let i = 0; i < cells.length && picked.length < limit; i += stride) {
+    picked.push(cells[i])
+  }
+  if (picked.length < limit) {
+    for (let i = 0; i < cells.length && picked.length < limit; i += 1) {
+      if (i % stride === 0) continue
+      picked.push(cells[i])
+    }
+  }
+  return picked
 }
 
 export const buildAqiGridCells = (geometry) => {
@@ -89,7 +108,7 @@ export const buildAqiGridCells = (geometry) => {
     }
   }
 
-  return { cells, cellMeters, bbox }
+  return { cells: thinCells(cells, MAX_FETCH_CELLS), cellMeters, bbox }
 }
 
 const aqiColor = (aqi) => {
@@ -108,8 +127,62 @@ const aqiColor = (aqi) => {
   ]
 }
 
-// Soft IDW so neighboring cells fuse into one continuous field
-const sampleField = (field, lat, lng, soft) => {
+/** Nearest sensor (for hover tip). */
+const nearestSample = (field, lat, lng) => {
+  if (!field.length) return null
+  const cos = Math.cos((lat * Math.PI) / 180)
+  let nearest = null
+  let nearestDist = Infinity
+
+  field.forEach((point) => {
+    if (point.aqi == null) return
+    const dLat = lat - point.lat
+    const dLng = (lng - point.lng) * cos
+    const dist = Math.sqrt(dLat * dLat + dLng * dLng)
+    if (dist < nearestDist) {
+      nearestDist = dist
+      nearest = point
+    }
+  })
+
+  return nearest
+}
+
+/** Typical spacing between sensors → controls how wide the color gradient is. */
+const estimateBlendRadius = (field) => {
+  if (!field?.length) return 0.02
+  if (field.length === 1) return 0.04
+  let sum = 0
+  let count = 0
+  for (let i = 0; i < field.length; i += 1) {
+    const a = field[i]
+    if (a.aqi == null) continue
+    const cos = Math.cos((a.lat * Math.PI) / 180)
+    let best = Infinity
+    for (let j = 0; j < field.length; j += 1) {
+      if (i === j) continue
+      const b = field[j]
+      if (b.aqi == null) continue
+      const dLat = a.lat - b.lat
+      const dLng = (a.lng - b.lng) * cos
+      const dist = Math.sqrt(dLat * dLat + dLng * dLng)
+      if (dist > 0 && dist < best) best = dist
+    }
+    if (Number.isFinite(best)) {
+      sum += best
+      count += 1
+    }
+  }
+  const mean = count ? sum / count : 0.03
+  // Blend across ~55% of neighbor spacing so side colors merge smoothly
+  return Math.max(0.008, Math.min(0.12, mean * 0.55))
+}
+
+/**
+ * Soft IDW blend of neighboring sensor AQI → smooth gradient between side colors.
+ * Returns { aqi, nearest } for paint + tip.
+ */
+const sampleBlended = (field, lat, lng, soft) => {
   if (!field.length) return null
   const cos = Math.cos((lat * Math.PI) / 180)
   let nearest = null
@@ -121,20 +194,27 @@ const sampleField = (field, lat, lng, soft) => {
     if (point.aqi == null) return
     const dLat = lat - point.lat
     const dLng = (lng - point.lng) * cos
-    const dist2 = dLat * dLat + dLng * dLng
-    const dist = Math.sqrt(dist2)
+    const dist = Math.sqrt(dLat * dLat + dLng * dLng)
     if (dist < nearestDist) {
       nearestDist = dist
-      nearest = point.aqi
+      nearest = point
     }
-    const weight = 1 / Math.pow(dist + soft, 2)
+    const weight = 1 / Math.pow(dist + soft, 2.2)
     sum += point.aqi * weight
     weightTotal += weight
   })
 
-  if (!weightTotal) return null
-  if (nearest != null && nearestDist < soft * 1.2) return nearest
-  return sum / weightTotal
+  if (!weightTotal || !nearest) return null
+  return { aqi: sum / weightTotal, nearest }
+}
+
+const uniqueAqiCount = (field) => {
+  const set = new Set()
+  field.forEach((point) => {
+    if (point.aqi == null) return
+    set.add(Math.round(Number(point.aqi)))
+  })
+  return set.size
 }
 
 const FitToGeometry = ({ geometry }) => {
@@ -150,7 +230,7 @@ const FitToGeometry = ({ geometry }) => {
   return null
 }
 
-const AQIHeatLayer = ({ geometry, field, cellMeters, soft }) => {
+const AQIHeatLayer = ({ geometry, field, cellMeters, sourceLabel }) => {
   const map = useMap()
 
   useEffect(() => {
@@ -165,8 +245,8 @@ const AQIHeatLayer = ({ geometry, field, cellMeters, soft }) => {
     tip.style.display = 'none'
     const ctx = canvas.getContext('2d')
     const heat = document.createElement('canvas')
-    heat.width = 320
-    heat.height = 220
+    heat.width = 640
+    heat.height = 440
     const heatCtx = heat.getContext('2d', { willReadFrequently: true })
 
     let alive = true
@@ -175,7 +255,7 @@ const AQIHeatLayer = ({ geometry, field, cellMeters, soft }) => {
     let pixelWidth = 0
     let pixelHeight = 0
     const fieldRef = field
-    const softRef = soft
+    const soft = estimateBlendRadius(field)
 
     const syncCanvas = () => {
       const size = map.getSize()
@@ -197,21 +277,24 @@ const AQIHeatLayer = ({ geometry, field, cellMeters, soft }) => {
     }
 
     const paintHeat = (size) => {
-      const image = heatCtx.createImageData(heat.width, heat.height)
+      const width = heat.width
+      const height = heat.height
+      const image = heatCtx.createImageData(width, height)
       const pixels = image.data
-      for (let y = 0; y < heat.height; y += 1) {
-        for (let x = 0; x < heat.width; x += 1) {
+
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const offset = (y * width + x) * 4
           const latLng = map.containerPointToLatLng([
-            ((x + 0.5) * size.x) / heat.width,
-            ((y + 0.5) * size.y) / heat.height
+            ((x + 0.5) * size.x) / width,
+            ((y + 0.5) * size.y) / height
           ])
-          const offset = (y * heat.width + x) * 4
           if (!pointInGeometry([latLng.lng, latLng.lat], geometry)) {
             pixels[offset + 3] = 0
             continue
           }
-          const aqi = sampleField(fieldRef, latLng.lat, latLng.lng, softRef)
-          const color = aqiColor(aqi)
+          const blended = sampleBlended(fieldRef, latLng.lat, latLng.lng, soft)
+          const color = aqiColor(blended?.aqi)
           if (!color) {
             pixels[offset + 3] = 0
             continue
@@ -222,6 +305,7 @@ const AQIHeatLayer = ({ geometry, field, cellMeters, soft }) => {
           pixels[offset + 3] = 200
         }
       }
+
       heatCtx.putImageData(image, 0, 0)
     }
 
@@ -235,9 +319,10 @@ const AQIHeatLayer = ({ geometry, field, cellMeters, soft }) => {
         paintHeat(size)
         dirty = false
       }
+      // Soft upscale so neighboring zone colors melt into a gradient
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = 'high'
-      ctx.globalAlpha = 0.9
+      ctx.globalAlpha = 0.88
       ctx.drawImage(heat, 0, 0, size.x, size.y)
       ctx.globalAlpha = 1
     }
@@ -249,12 +334,14 @@ const AQIHeatLayer = ({ geometry, field, cellMeters, soft }) => {
         tip.style.display = 'none'
         return
       }
-      const aqi = sampleField(fieldRef, event.latlng.lat, event.latlng.lng, softRef)
-      if (aqi == null) {
+      const blended = sampleBlended(fieldRef, event.latlng.lat, event.latlng.lng, soft)
+      const nearest = blended?.nearest || nearestSample(fieldRef, event.latlng.lat, event.latlng.lng)
+      if (blended?.aqi == null) {
         tip.style.display = 'none'
         return
       }
-      tip.textContent = `AQI ${Math.round(aqi)} · ~${cellMeters} m`
+      const place = nearest?.name ? ` · ${nearest.name}` : ''
+      tip.textContent = `AQI ${Math.round(blended.aqi)}${place}`
       tip.style.display = 'block'
       const point = map.mouseEventToContainerPoint(event.originalEvent)
       tip.style.left = `${point.x + 14}px`
@@ -282,7 +369,7 @@ const AQIHeatLayer = ({ geometry, field, cellMeters, soft }) => {
       tip.remove()
       canvas.remove()
     }
-  }, [map, geometry, field, cellMeters, soft])
+  }, [map, geometry, field, cellMeters, sourceLabel])
 
   return null
 }
@@ -294,6 +381,8 @@ const AQIGridMap = ({ geometry }) => {
   const [done, setDone] = useState(0)
   const [total, setTotal] = useState(0)
   const [error, setError] = useState(null)
+  const [source, setSource] = useState('sensors')
+  const [note, setNote] = useState(null)
 
   const gridKey = useMemo(() => {
     if (!geometry) return ''
@@ -304,10 +393,7 @@ const AQIGridMap = ({ geometry }) => {
     }
   }, [geometry])
 
-  const soft = useMemo(() => {
-    // Fuse cells: soft radius ~0.6× cell size in degrees latitude
-    return Math.max(0.00015, (cellMeters / METERS_PER_DEG_LAT) * 0.65)
-  }, [cellMeters])
+  const distinctCount = useMemo(() => uniqueAqiCount(samples), [samples])
 
   useEffect(() => {
     if (!geometry) {
@@ -315,26 +401,32 @@ const AQIGridMap = ({ geometry }) => {
       setTotal(0)
       setDone(0)
       setError(null)
+      setNote(null)
       return undefined
     }
 
     let cancelled = false
-    const { cells: grid, cellMeters: size } = buildAqiGridCells(geometry)
+    const bbox = bboxOfGeometry(geometry)
+    const { cellMeters: size } = buildAqiGridCells(geometry)
     setCellMeters(size)
-    setTotal(grid.length)
     setDone(0)
+    setTotal(0)
     setError(null)
+    setNote(null)
     setSamples([])
-
-    if (!grid.length) {
-      setLoading(false)
-      setError('No sample points inside this area. Try a larger draw.')
-      return undefined
-    }
-
+    setSource('sensors')
     setLoading(true)
 
-    const run = async () => {
+    const loadBackendFallback = async () => {
+      const { cells: grid } = buildAqiGridCells(geometry)
+      if (!grid.length) {
+        setError('No sample points inside this area. Try a larger draw.')
+        setLoading(false)
+        return
+      }
+      setSource('model')
+      setTotal(grid.length)
+      setNote('Using model AQI (few local sensors). Values may look similar.')
       const next = []
       for (let i = 0; i < grid.length; i += BATCH_SIZE) {
         if (cancelled) return
@@ -362,12 +454,59 @@ const AQIGridMap = ({ geometry }) => {
       }
     }
 
-    run().catch((err) => {
-      if (!cancelled) {
-        setLoading(false)
-        setError(err.message || 'AQI heatmap failed to load')
+    const run = async () => {
+      try {
+        const { samples: sensorSamples } = await fetchAqiSamplesForArea(
+          bbox,
+          (progress) => {
+            if (cancelled) return
+            setTotal(progress.sampleCount || 0)
+            setDone(progress.fetched || 0)
+            if (progress.samples?.length) {
+              setSamples(progress.samples)
+            }
+          }
+        )
+        if (cancelled) return
+
+        if (sensorSamples.length >= 2) {
+          setSamples(sensorSamples)
+          setSource('sensors')
+          setTotal(sensorSamples.length)
+          setDone(sensorSamples.length)
+          setLoading(false)
+          if (uniqueAqiCount(sensorSamples) < 2) {
+            setNote('Local sensors report similar AQI right now.')
+          } else {
+            setNote(`${sensorSamples.length} sensors · ${uniqueAqiCount(sensorSamples)} AQI levels`)
+          }
+          return
+        }
+
+        if (sensorSamples.length === 1) {
+          setSamples(sensorSamples)
+          setSource('sensors')
+          setNote('Only one local sensor found — whole area uses that reading.')
+          setLoading(false)
+          return
+        }
+
+        await loadBackendFallback()
+      } catch (err) {
+        if (cancelled) return
+        // Missing token or aqi.in failure → model fallback
+        try {
+          await loadBackendFallback()
+        } catch (fallbackErr) {
+          if (!cancelled) {
+            setLoading(false)
+            setError(fallbackErr.message || err.message || 'AQI heatmap failed to load')
+          }
+        }
       }
-    })
+    }
+
+    run()
 
     return () => { cancelled = true }
   }, [gridKey, geometry])
@@ -388,19 +527,27 @@ const AQIGridMap = ({ geometry }) => {
           geometry={geometry}
           field={samples}
           cellMeters={cellMeters}
-          soft={soft}
+          sourceLabel={source}
         />
       )}
 
       <div className="weather-scale aqi-weather-scale">
         <span className="weather-scale-title">AQI</span>
         {loading && (
-          <span className="weather-scale-note">Loading {done}/{total}…</span>
+          <span className="weather-scale-note">
+            {source === 'sensors' ? `Finding sensors ${done}/${total || '…'}` : `Loading ${done}/${total}…`}
+          </span>
         )}
         {error && <span className="weather-scale-note" style={{ color: '#fca5a5' }}>{error}</span>}
         {!loading && !error && (
           <>
-            <span className="weather-scale-unit">~{cellMeters} m</span>
+            <span className="weather-scale-unit">
+              {source === 'sensors'
+                ? `${samples.length} sensor${samples.length === 1 ? '' : 's'}`
+                : `~${cellMeters} m`}
+              {distinctCount > 1 ? ` · ${distinctCount} levels` : ''}
+            </span>
+            {note && <span className="weather-scale-note">{note}</span>}
             <div
               className="weather-scale-bar"
               style={{
