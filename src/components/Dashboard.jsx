@@ -5,6 +5,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { format, subDays, startOfDay, isAfter, addDays, isBefore, isEqual, isToday, subHours, parseISO } from 'date-fns'
 import { LineChart, Line, BarChart, Bar, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Dot } from 'recharts'
 import MapComponent, { BASEMAPS } from './MapComponent'
+import PlaceSearch from './PlaceSearch'
 import AreaPollutantsPanel from './AreaPollutantsPanel'
 import WeatherSection from './WeatherSection'
 import AQISection from './AQISection'
@@ -27,6 +28,8 @@ const Dashboard = () => {
   const [endDate, setEndDate] = useState(format(today, 'yyyy-MM-dd'))
   const [viewType, setViewType] = useState('satellite')
   const [basemapMenuOpen, setBasemapMenuOpen] = useState(false)
+  const [layersMenuOpen, setLayersMenuOpen] = useState(false)
+  const layersMenuRef = useRef(null)
   const [showWind, setShowWind] = useState(false)
   const [showTemperature, setShowTemperature] = useState(false)
   const [showRain, setShowRain] = useState(false)
@@ -53,10 +56,22 @@ const Dashboard = () => {
   const [methaneError, setMethaneError] = useState(null)
   const [show3DView, setShow3DView] = useState(false)
   const [mapView, setMapView] = useState(null)
+  const [locateRequest, setLocateRequest] = useState(0)
+  const [locateState, setLocateState] = useState({ locating: false, active: false, error: null })
+  const [leafletMap, setLeafletMap] = useState(null)
+  const [searchedPlace, setSearchedPlace] = useState(null)
   
   // Refs to prevent multiple simultaneous API calls
   const isFetchingRef = useRef(false)
   const lastFetchKeyRef = useRef(null)
+
+  const handleLocateStateChange = useCallback((next) => {
+    setLocateState(next)
+  }, [])
+
+  const handleMapReady = useCallback((mapInstance) => {
+    setLeafletMap(mapInstance)
+  }, [])
 
   useEffect(() => {
     // Update dates daily - recalculate one week ago from today
@@ -305,6 +320,27 @@ const Dashboard = () => {
   const toggleSensorData = () => {
     setShowSensorData((on) => !on)
   }
+
+  const activeLayerCount = [showTemperature, showRain, showWind, showAqi, showSensorData]
+    .filter(Boolean).length
+
+  useEffect(() => {
+    if (!layersMenuOpen) return undefined
+    const onPointerDown = (event) => {
+      if (layersMenuRef.current && !layersMenuRef.current.contains(event.target)) {
+        setLayersMenuOpen(false)
+      }
+    }
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setLayersMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [layersMenuOpen])
 
   const getMaxDate = () => {
     return format(today, 'yyyy-MM-dd')
@@ -1398,132 +1434,226 @@ const Dashboard = () => {
             </Suspense>
           ) : !showAnalysis ? (
             <div className="map-wrapper">
-              <div className="map-left-stack">
-                <div className="map-floating-actions">
-                  <div className="map-tools-row">
-                    <button
-                      className="action-button draw-button"
-                      onClick={handleDrawArea}
-                      disabled={isDrawing}
-                      type="button"
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-                        <path d="M2 17l10 5 10-5"></path>
-                        <path d="M2 12l10 5 10-5"></path>
-                      </svg>
-                      <span className="action-button-label">Draw Area</span>
-                    </button>
+              <div className="map-top-bar">
+                <div className="map-top-bar-group map-top-bar-tools">
+                  <button
+                    className="view-toggle-button"
+                    onClick={handleDrawArea}
+                    disabled={isDrawing}
+                    type="button"
+                    title="Draw area"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                      <path d="M2 17l10 5 10-5"></path>
+                      <path d="M2 12l10 5 10-5"></path>
+                    </svg>
+                    <span className="view-toggle-label">Draw Area</span>
+                  </button>
 
-                    <label className="action-button upload-button">
-                      <input
-                        type="file"
-                        accept=".kml,.kmz"
-                        onChange={handleKMLUpload}
-                        style={{ display: 'none' }}
-                      />
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="17 8 12 3 7 8"></polyline>
-                        <line x1="12" y1="3" x2="12" y2="15"></line>
-                      </svg>
-                      <span className="action-button-label">Upload KML</span>
-                    </label>
-                  </div>
+                  <label className="view-toggle-button map-top-upload" title="Upload KML">
+                    <input
+                      type="file"
+                      accept=".kml,.kmz"
+                      onChange={handleKMLUpload}
+                      style={{ display: 'none' }}
+                    />
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="17 8 12 3 7 8"></polyline>
+                      <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <span className="view-toggle-label">Upload KML</span>
+                  </label>
+
+                  <button
+                    type="button"
+                    className={`view-toggle-button locate-action-button${locateState.active ? ' active' : ''}${locateState.locating ? ' locating' : ''}`}
+                    onClick={() => setLocateRequest((n) => n + 1)}
+                    disabled={locateState.locating}
+                    title={locateState.active ? 'Hide my location' : 'Show my location'}
+                    aria-pressed={locateState.active}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <circle cx="12" cy="12" r="3"></circle>
+                      <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
+                    </svg>
+                    <span className="view-toggle-label">Locate me</span>
+                  </button>
                 </div>
 
-                {selectedGeometry && (
-                  <AreaPollutantsPanel
-                    geometry={selectedGeometry}
-                    areaLabel={uploadedKML ? `KML: ${uploadedKML.name}` : 'Drawn area'}
-                    onClear={handleClearGeometry}
+                <div className="map-top-bar-search">
+                  <PlaceSearch
+                    map={leafletMap}
+                    selectedPlace={searchedPlace}
+                    onSelect={setSearchedPlace}
+                    onClear={() => setSearchedPlace(null)}
                   />
-                )}
-              </div>
+                </div>
 
-              <div className="view-toggle-container view-toggle-container--on-map">
-                <div className="view-toggle-row view-toggle-row--layers">
+                <div className="map-top-bar-group map-top-bar-actions">
                   <button
-                    className={`view-toggle-button ${showTemperature ? 'active' : ''}`}
-                    onClick={toggleTemperature}
-                    title={showTemperature ? 'Hide temperature' : 'Show temperature on the map'}
+                    className={`view-toggle-button ${loading ? 'active' : ''}`}
+                    onClick={handleAnalyse}
+                    disabled={loading}
                     type="button"
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
-                    </svg>
-                    <span className="view-toggle-label">Temp</span>
+                    <span>{loading ? 'Loading…' : 'Analyse'}</span>
                   </button>
                   <button
-                    className={`view-toggle-button ${showRain ? 'active' : ''}`}
-                    onClick={toggleRain}
-                    title={showRain ? 'Hide rain' : 'Show rain on the map'}
+                    className={`view-toggle-button ${methaneOverlay ? 'active' : ''}`}
+                    onClick={handleAnalyseMethane}
+                    disabled={methaneLoading || loading}
                     type="button"
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M16 13V21M8 13V21M12 15V23"></path>
-                      <path d="M20 10.5a5.5 5.5 0 0 0-10.2-2.8A4.5 4.5 0 1 0 6.5 16H19a3.5 3.5 0 0 0 1-5.5z"></path>
-                    </svg>
-                    <span className="view-toggle-label">Rain</span>
+                    <span className="label-full">{methaneLoading ? 'Loading…' : 'Analysis Methane'}</span>
+                    <span className="label-short">{methaneLoading ? '…' : 'Methane'}</span>
                   </button>
                   <button
-                    className={`view-toggle-button ${showWind ? 'active' : ''}`}
-                    onClick={toggleWind}
-                    title={showWind ? 'Hide wind' : 'Show wind on the map'}
+                    className={`view-toggle-button ${show3DView ? 'active' : ''}`}
+                    onClick={handleOpen3DView}
+                    disabled={!selectedGeometry && !mapView}
+                    title={selectedGeometry ? 'Show 3D buildings for the drawn area' : 'Show this map area in 3D'}
                     type="button"
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M3 8h11a3 3 0 1 0-3-3"></path>
-                      <path d="M3 12h15a3 3 0 1 1-3 3"></path>
-                      <path d="M3 16h8"></path>
-                    </svg>
-                    <span className="view-toggle-label">Wind</span>
+                    <span>3D View</span>
                   </button>
-                  <button
-                    className={`view-toggle-button ${showAqi ? 'active' : ''}`}
-                    onClick={toggleAqi}
-                    title={
-                      showAqi
-                        ? 'Hide AQI grid'
-                        : 'Show AQI grid for the drawn area (~50–100 m cells)'
-                    }
-                    type="button"
+                </div>
+
+                <div className="map-top-bar-group map-top-bar-menus">
+                  <div
+                    className={`layers-menu${layersMenuOpen ? ' is-open' : ''}`}
+                    ref={layersMenuRef}
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M12 2v4"></path>
-                      <path d="M12 18v4"></path>
-                      <path d="M4.93 4.93l2.83 2.83"></path>
-                      <path d="M16.24 16.24l2.83 2.83"></path>
-                      <path d="M2 12h4"></path>
-                      <path d="M18 12h4"></path>
-                      <path d="M4.93 19.07l2.83-2.83"></path>
-                      <path d="M16.24 7.76l2.83-2.83"></path>
-                      <circle cx="12" cy="12" r="3"></circle>
-                    </svg>
-                    <span className="view-toggle-label">AQI</span>
-                  </button>
-                  <button
-                    className={`view-toggle-button ${showSensorData ? 'active' : ''}`}
-                    onClick={toggleSensorData}
-                    title={
-                      showSensorData
-                        ? 'Hide nearby aqi.in sensors'
-                        : 'Show nearby aqi.in sensor data for the current map location'
-                    }
-                    type="button"
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M12 3v3"></path>
-                      <path d="M12 18v3"></path>
-                      <circle cx="12" cy="12" r="3"></circle>
-                      <path d="M5 8h3M16 8h3M5 16h3M16 16h3"></path>
-                    </svg>
-                    <span className="view-toggle-label">Sensor</span>
-                  </button>
+                    <button
+                      type="button"
+                      className={`view-toggle-button layers-menu-trigger${layersMenuOpen || activeLayerCount > 0 ? ' active' : ''}`}
+                      onClick={() => {
+                        setLayersMenuOpen((open) => !open)
+                        setBasemapMenuOpen(false)
+                      }}
+                      title={layersMenuOpen ? 'Close layers' : 'Map layers'}
+                      aria-expanded={layersMenuOpen}
+                      aria-haspopup="true"
+                    >
+                      <span className="layers-menu-icon" aria-hidden="true">
+                        <span />
+                        <span />
+                        <span />
+                      </span>
+                      <span className="view-toggle-label">Layers</span>
+                      {activeLayerCount > 0 && (
+                        <span className="layers-menu-badge">{activeLayerCount}</span>
+                      )}
+                    </button>
+
+                    <div
+                      className="layers-menu-panel"
+                      role="menu"
+                      aria-hidden={!layersMenuOpen}
+                    >
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showTemperature ? 'active' : ''}`}
+                        onClick={toggleTemperature}
+                        title={showTemperature ? 'Hide temperature' : 'Show temperature on the map'}
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showTemperature}
+                        style={{ '--item-index': 0 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
+                        </svg>
+                        <span className="view-toggle-label">Temp</span>
+                      </button>
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showRain ? 'active' : ''}`}
+                        onClick={toggleRain}
+                        title={showRain ? 'Hide rain' : 'Show rain on the map'}
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showRain}
+                        style={{ '--item-index': 1 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M16 13V21M8 13V21M12 15V23"></path>
+                          <path d="M20 10.5a5.5 5.5 0 0 0-10.2-2.8A4.5 4.5 0 1 0 6.5 16H19a3.5 3.5 0 0 0 1-5.5z"></path>
+                        </svg>
+                        <span className="view-toggle-label">Rain</span>
+                      </button>
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showWind ? 'active' : ''}`}
+                        onClick={toggleWind}
+                        title={showWind ? 'Hide wind' : 'Show wind on the map'}
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showWind}
+                        style={{ '--item-index': 2 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M3 8h11a3 3 0 1 0-3-3"></path>
+                          <path d="M3 12h15a3 3 0 1 1-3 3"></path>
+                          <path d="M3 16h8"></path>
+                        </svg>
+                        <span className="view-toggle-label">Wind</span>
+                      </button>
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showAqi ? 'active' : ''}`}
+                        onClick={toggleAqi}
+                        title={
+                          showAqi
+                            ? 'Hide AQI grid'
+                            : 'Show AQI grid for the drawn area (~50–100 m cells)'
+                        }
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showAqi}
+                        style={{ '--item-index': 3 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M12 2v4"></path>
+                          <path d="M12 18v4"></path>
+                          <path d="M4.93 4.93l2.83 2.83"></path>
+                          <path d="M16.24 16.24l2.83 2.83"></path>
+                          <path d="M2 12h4"></path>
+                          <path d="M18 12h4"></path>
+                          <path d="M4.93 19.07l2.83-2.83"></path>
+                          <path d="M16.24 7.76l2.83-2.83"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                        <span className="view-toggle-label">AQI</span>
+                      </button>
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showSensorData ? 'active' : ''}`}
+                        onClick={toggleSensorData}
+                        title={
+                          showSensorData
+                            ? 'Hide nearby aqi.in sensors'
+                            : 'Show nearby aqi.in sensor data for the current map location'
+                        }
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showSensorData}
+                        style={{ '--item-index': 4 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M12 3v3"></path>
+                          <path d="M12 18v3"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                          <path d="M5 8h3M16 8h3M5 16h3M16 16h3"></path>
+                        </svg>
+                        <span className="view-toggle-label">Sensor</span>
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="basemap-picker">
                     <button
                       className={`view-toggle-button ${basemapMenuOpen ? 'active' : ''}`}
-                      onClick={() => setBasemapMenuOpen((open) => !open)}
+                      onClick={() => {
+                        setBasemapMenuOpen((open) => !open)
+                        setLayersMenuOpen(false)
+                      }}
                       title="Choose basemap"
                       type="button"
                       aria-expanded={basemapMenuOpen}
@@ -1553,34 +1683,20 @@ const Dashboard = () => {
                 </div>
               </div>
 
-              <div className="map-bottom-actions">
-                <button
-                  className={`view-toggle-button ${loading ? 'active' : ''}`}
-                  onClick={handleAnalyse}
-                  disabled={loading}
-                  type="button"
-                >
-                  <span>{loading ? 'Loading…' : 'Analyse'}</span>
-                </button>
-                <button
-                  className={`view-toggle-button ${methaneOverlay ? 'active' : ''}`}
-                  onClick={handleAnalyseMethane}
-                  disabled={methaneLoading || loading}
-                  type="button"
-                >
-                  <span className="label-full">{methaneLoading ? 'Loading…' : 'Analysis Methane'}</span>
-                  <span className="label-short">{methaneLoading ? '…' : 'Methane'}</span>
-                </button>
-                <button
-                  className={`view-toggle-button ${show3DView ? 'active' : ''}`}
-                  onClick={handleOpen3DView}
-                  disabled={!selectedGeometry && !mapView}
-                  title={selectedGeometry ? 'Show 3D buildings for the drawn area' : 'Show this map area in 3D'}
-                  type="button"
-                >
-                  <span>3D View</span>
-                </button>
-              </div>
+              {locateState.error && (
+                <div className="locate-toolbar-error locate-toolbar-error--bar">{locateState.error}</div>
+              )}
+
+              {selectedGeometry && (
+                <div className="map-side-panel">
+                  <AreaPollutantsPanel
+                    geometry={selectedGeometry}
+                    areaLabel={uploadedKML ? `KML: ${uploadedKML.name}` : 'Drawn area'}
+                    onClear={handleClearGeometry}
+                  />
+                </div>
+              )}
+
               {methaneError && <p className="methane-map-note">{methaneError}</p>}
 
               <MapComponent 
@@ -1600,6 +1716,10 @@ const Dashboard = () => {
                 methaneLoading={methaneLoading}
                 onClearMethane={handleClearMethane}
                 onMapView={handleMapView}
+                locateRequest={locateRequest}
+                onLocateStateChange={handleLocateStateChange}
+                onMapReady={handleMapReady}
+                searchedPlace={searchedPlace}
               />
             </div>
           ) : (

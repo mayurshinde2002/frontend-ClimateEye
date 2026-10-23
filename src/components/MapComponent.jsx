@@ -1,9 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, TileLayer, Polygon, GeoJSON, useMap, Circle, CircleMarker, Marker, Popup } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import DrawAreaComponent from './DrawAreaComponent'
-import PlaceSearch from './PlaceSearch'
 import { fetchAreaConstruction } from '../services/areaConstruction'
 import { CONSTRUCTION_COLOR, describeConstruction } from '../services/constructionTiles'
 import { calculateGeometryCenter } from '../services/api'
@@ -290,13 +289,16 @@ const MapComponent = ({
   methaneOverlay,
   methaneLoading,
   onClearMethane,
-  onMapView
+  onMapView,
+  locateRequest = 0,
+  onLocateStateChange,
+  onMapReady,
+  searchedPlace = null
 }) => {
   const [mapCenter] = useState([20.5937, 78.9629]) // Default to India center
   const [mapZoom] = useState(5)
   const [polygonCoordinates, setPolygonCoordinates] = useState(null)
   const [map, setMap] = useState(null)
-  const [searchedPlace, setSearchedPlace] = useState(null)
   const [areaConstruction, setAreaConstruction] = useState(null)
   const [userLocation, setUserLocation] = useState(null)
   const [selectedRadius, setSelectedRadius] = useState(1000)
@@ -305,6 +307,11 @@ const MapComponent = ({
   const [viewCenter, setViewCenter] = useState({ latitude: mapCenter[0], longitude: mapCenter[1] })
 
   const handleViewCenter = useMemo(() => (center) => setViewCenter(center), [])
+
+  useEffect(() => {
+    onMapReady?.(map || null)
+    return () => onMapReady?.(null)
+  }, [map, onMapReady])
 
   const focusPoint = useMemo(() => {
     if (userLocation) return { latitude: userLocation.lat, longitude: userLocation.lng }
@@ -325,7 +332,7 @@ const MapComponent = ({
     setLocating(false)
   }
 
-  const locateUser = () => {
+  const locateUser = useCallback(() => {
     // Toggle off: hide marker, rings, and nearby data panel
     if (userLocation) {
       clearUserLocation()
@@ -363,7 +370,22 @@ const MapComponent = ({
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
     )
-  }
+  }, [userLocation, map])
+
+  useEffect(() => {
+    if (!locateRequest) return
+    locateUser()
+    // Only fire when Dashboard increments locateRequest (not when locateUser identity changes).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+  }, [locateRequest])
+
+  useEffect(() => {
+    onLocateStateChange?.({
+      locating,
+      active: Boolean(userLocation),
+      error: locationError
+    })
+  }, [locating, userLocation, locationError, onLocateStateChange])
 
   useEffect(() => {
     if (!drawnGeometry) {
@@ -621,28 +643,6 @@ const MapComponent = ({
           date={todayDate()}
         />
       )}
-
-      <button
-        type="button"
-        className={`locate-button${locating ? ' locating' : ''}${userLocation ? ' active' : ''}`}
-        onClick={locateUser}
-        disabled={locating}
-        title={userLocation ? 'Hide my location' : 'Show my location'}
-        aria-pressed={Boolean(userLocation)}
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
-        </svg>
-      </button>
-      {locationError && <div className="locate-error">{locationError}</div>}
-
-      <PlaceSearch
-        map={map}
-        selectedPlace={searchedPlace}
-        onSelect={setSearchedPlace}
-        onClear={() => setSearchedPlace(null)}
-      />
 
       {(methaneLoading || methaneOverlay) && (
         <div className="methane-legend">

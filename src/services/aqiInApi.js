@@ -6,7 +6,9 @@
  * - GET /aqi/v2/getNearestLocation?lat=&long=&type=2&source=web  → nearest city
  * - GET /aqi/getNearestLocation?...                              → v1 (Locations key)
  * - GET /aqi/getAirQualityRanklistCountryAndCity?sensorname=aqi&type=2&limit=30&source=web
- *     → city AQI ranking (type=2 = cities)
+ * - GET /aqi/v2/getLast24HourHistory?slug=&sensorname=AQI-IN&slugType=cityId&source=web
+ * - GET /aqi/getLast7DaysHistory?slug=&sensorname=AQI-IN&slugType=cityId|locationId&source=web
+ * - GET /aqi/getLast30DaysHistory?slug=&sensorname=AQI-IN&slugType=cityId&source=web
  *
  * type=0 / type=3 on nearest → 400. Many other guessed paths → 404.
  */
@@ -388,4 +390,150 @@ export const aqiInLabel = (aqi) => {
   if (value <= 200) return 'Unhealthy'
   if (value <= 300) return 'Severe'
   return 'Hazardous'
+}
+
+export const HISTORY_RANGES = {
+  '24h': {
+    id: '24h',
+    label: '24 Hours',
+    path: '/aqi/v2/getLast24HourHistory'
+  },
+  '7d': {
+    id: '7d',
+    label: '7 Days',
+    path: '/aqi/getLast7DaysHistory'
+  },
+  '30d': {
+    id: '30d',
+    label: '30 Days',
+    path: '/aqi/getLast30DaysHistory'
+  }
+}
+
+/** Resolve aqi.in slug + slugType from a nearest-location / ranklist station. */
+export const resolveHistorySlug = (place) => {
+  if (!place) return null
+  const citySlug = place.city_slug || place.citySlug
+  const locationSlug = place.location_slug || place.locationSlug || place.slug
+  const parts = String(locationSlug || '').split('/').filter(Boolean)
+
+  if (citySlug) {
+    return { slug: citySlug, slugType: 'cityId', title: place.city || place.location || citySlug }
+  }
+  // india/state/city → cityId
+  if (parts.length === 3) {
+    return {
+      slug: parts.join('/'),
+      slugType: 'cityId',
+      title: place.city || place.location || parts[2]
+    }
+  }
+  // india/state/city/area → locationId
+  if (parts.length >= 4) {
+    return {
+      slug: parts.join('/'),
+      slugType: 'locationId',
+      title: place.location || place.city || parts[parts.length - 1]
+    }
+  }
+  if (locationSlug) {
+    return {
+      slug: locationSlug,
+      slugType: 'cityId',
+      title: place.city || place.location || locationSlug
+    }
+  }
+  return null
+}
+
+const formatHistoryTick = (iso, rangeId) => {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return String(iso)
+  if (rangeId === '30d') {
+    return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  }
+  const hour = date.getHours()
+  const ampm = hour >= 12 ? 'pm' : 'am'
+  const h12 = hour % 12 || 12
+  const day = date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  if (rangeId === '24h') return `${h12}${ampm}`
+  return `${h12}${ampm} ${day}`
+}
+
+/**
+ * Historical AQI series for a place slug.
+ * @param {'24h'|'7d'|'30d'} rangeId
+ */
+export const fetchAqiHistory = async (
+  rangeId,
+  { slug, slugType = 'cityId', sensorname = 'AQI-IN', source = 'web' } = {}
+) => {
+  const range = HISTORY_RANGES[rangeId]
+  if (!range) throw new Error(`Unsupported history range: ${rangeId}`)
+  if (!slug) throw new Error('History slug is required')
+
+  const params = new URLSearchParams({
+    slug: String(slug),
+    sensorname: String(sensorname),
+    slugType: String(slugType),
+    source: String(source)
+  })
+
+  const response = await fetch(
+    `${AQI_IN_BASE}${range.path}?${params.toString()}`,
+    { method: 'GET', headers: authHeaders() }
+  )
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(text || `aqi.in history error ${response.status}`)
+  }
+
+  const payload = await response.json()
+  const block = payload?.data || {}
+  const values = Array.isArray(block.averageArray) ? block.averageArray : []
+  const times = Array.isArray(block.timeArray) ? block.timeArray : []
+  const length = Math.min(values.length, times.length)
+
+  const points = []
+  for (let i = 0; i < length; i += 1) {
+    const aqi = Number(values[i])
+    if (!Number.isFinite(aqi)) continue
+    const time = times[i]
+    points.push({
+      index: i,
+      time,
+      aqi,
+      label: formatHistoryTick(time, rangeId),
+      color: aqiInColor(aqi)
+    })
+  }
+
+  let minPoint = null
+  let maxPoint = null
+  points.forEach((point) => {
+    if (!minPoint || point.aqi < minPoint.aqi) minPoint = point
+    if (!maxPoint || point.aqi > maxPoint.aqi) maxPoint = point
+  })
+
+  return {
+    status: payload.status,
+    message: payload.message,
+    rangeId,
+    slug,
+    slugType,
+    minValue: Number(block.minValue) || minPoint?.aqi || null,
+    maxValue: Number(block.maxValue) || maxPoint?.aqi || null,
+    avgValue: Number(block.avgValue) || null,
+    minPoint,
+    maxPoint,
+    points,
+    startLabel: points[0]
+      ? new Date(points[0].time).toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric' })
+      : '',
+    endLabel: points.length
+      ? new Date(points[points.length - 1].time).toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric' })
+      : '',
+    fetchedAt: new Date().toISOString()
+  }
 }

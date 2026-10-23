@@ -4,6 +4,7 @@ import { CircleMarker, Popup, useMap, useMapEvents } from 'react-leaflet'
 import { aqiInColor, aqiInLabel, fetchSensorsInView } from '../services/aqiInApi'
 import { useLeafletSafeOverlay } from '../hooks/useLeafletSafeOverlay'
 import AqiRankingsPanel from './AqiRankingsPanel'
+import SensorHistoryChart from './SensorHistoryChart'
 import './SensorDataLayer.css'
 
 const finite = (value) => {
@@ -40,6 +41,7 @@ const SensorDataLayer = ({ onClose }) => {
   const [stations, setStations] = useState([])
   const [selected, setSelected] = useState(null)
   const [rankingsOpen, setRankingsOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [viewKey, setViewKey] = useState(() => viewKeyFromMap(map))
   const requestIdRef = useRef(0)
 
@@ -96,6 +98,9 @@ const SensorDataLayer = ({ onClose }) => {
   const onSelectRanked = (row) => {
     const lat = finite(row.latitude)
     const lng = finite(row.longitude)
+    setSelected(row)
+    setRankingsOpen(false)
+    setHistoryOpen(true)
     if (lat != null && lng != null) {
       map.flyTo([lat, lng], Math.max(map.getZoom(), 6), { animate: true, duration: 0.85 })
     }
@@ -103,6 +108,7 @@ const SensorDataLayer = ({ onClose }) => {
 
   const selectStation = (station) => {
     setSelected(station)
+    setHistoryOpen(false)
   }
 
   return (
@@ -229,13 +235,25 @@ const SensorDataLayer = ({ onClose }) => {
                     Updated {String(selected.updated_at).replace('T', ' ').replace('.000Z', ' UTC')}
                   </div>
                 )}
-                <button
-                  type="button"
-                  className="sensor-data-clear-selection"
-                  onClick={() => setSelected(null)}
-                >
-                  Clear selection
-                </button>
+                <div className="sensor-data-actions">
+                  <button
+                    type="button"
+                    className="sensor-history-open-btn"
+                    onClick={() => setHistoryOpen(true)}
+                  >
+                    History chart
+                  </button>
+                  <button
+                    type="button"
+                    className="sensor-data-clear-selection"
+                    onClick={() => {
+                      setSelected(null)
+                      setHistoryOpen(false)
+                    }}
+                  >
+                    Clear selection
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -244,6 +262,12 @@ const SensorDataLayer = ({ onClose }) => {
             open={rankingsOpen}
             onClose={() => setRankingsOpen(false)}
             onSelectCity={onSelectRanked}
+          />
+
+          <SensorHistoryChart
+            place={selected}
+            open={historyOpen && Boolean(selected)}
+            onClose={() => setHistoryOpen(false)}
           />
         </>,
         map.getContainer()

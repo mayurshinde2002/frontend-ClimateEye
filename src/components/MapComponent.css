@@ -170,9 +170,10 @@
   }
 
   .locate-error {
-    left: 50px;
-    bottom: calc(118px + env(safe-area-inset-bottom));
-    max-width: calc(100% - 64px);
+    left: 8px;
+    right: 8px;
+    bottom: calc(162px + env(safe-area-inset-bottom));
+    max-width: none;
   }
 
   .weather-scale,
@@ -540,18 +541,33 @@
   bottom: 72px;
   left: 16px;
   z-index: 1000;
-  width: 34px;
-  height: 34px;
-  display: flex;
+  width: auto;
+  height: 36px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  gap: 6px;
+  padding: 0 12px 0 10px;
   border: 1px solid rgba(20, 184, 166, 0.45);
-  border-radius: 8px;
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.95);
   color: #0f766e;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  line-height: 1;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.locate-button svg {
+  flex-shrink: 0;
+  display: block;
+}
+
+.locate-button span {
+  display: block;
 }
 
 .locate-button:hover:not(:disabled) {
@@ -587,7 +603,7 @@
 .locate-error {
   position: absolute;
   bottom: 72px;
-  left: 58px;
+  left: 128px;
   z-index: 1000;
   max-width: 260px;
   padding: 8px 10px;
