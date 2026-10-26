@@ -8,17 +8,25 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
   const pointsRef = useRef([])
   const markersRef = useRef([])
   const polylineRef = useRef(null)
+  const wasDrawingRef = useRef(false)
+  const onCompleteRef = useRef(onGeometryComplete)
+  const onCancelRef = useRef(onCancel)
   const [isActive, setIsActive] = useState(false)
   const [pointCount, setPointCount] = useState(0)
-  const handlersRef = useRef({ click: null, dblclick: null })
+
+  useEffect(() => {
+    onCompleteRef.current = onGeometryComplete
+  }, [onGeometryComplete])
+
+  useEffect(() => {
+    onCancelRef.current = onCancel
+  }, [onCancel])
 
   const restoreMapControls = useCallback(() => {
     try {
       if (!map?.getContainer?.()) return
       map.doubleClickZoom?.enable()
       map.boxZoom?.enable()
-      map.dragging?.enable()
-      map.scrollWheelZoom?.enable()
       map.getContainer().style.cursor = ''
       L.DomUtil.removeClass(map.getContainer(), 'leaflet-dragging')
       L.DomUtil.removeClass(document.body, 'leaflet-dragging')
@@ -27,17 +35,40 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
     }
   }, [map])
 
-  const cleanup = useCallback(() => {
-    markersRef.current.forEach((marker) => map.removeLayer(marker))
+  const clearLayers = useCallback(() => {
+    if (!map) return
+    markersRef.current.forEach((marker) => {
+      try { map.removeLayer(marker) } catch { /* ignore */ }
+    })
     markersRef.current = []
 
     if (polylineRef.current) {
-      map.removeLayer(polylineRef.current)
+      try { map.removeLayer(polylineRef.current) } catch { /* ignore */ }
       polylineRef.current = null
     }
+  }, [map])
 
+  const resetSession = useCallback(() => {
+    clearLayers()
     pointsRef.current = []
     setPointCount(0)
+  }, [clearLayers])
+
+  const redrawPolyline = useCallback(() => {
+    if (!map) return
+    if (polylineRef.current) {
+      try { map.removeLayer(polylineRef.current) } catch { /* ignore */ }
+      polylineRef.current = null
+    }
+    if (pointsRef.current.length > 1) {
+      polylineRef.current = L.polyline(pointsRef.current, {
+        color: '#14b8a6',
+        weight: 2,
+        dashArray: '5, 5',
+        opacity: 0.7,
+        interactive: false
+      }).addTo(map)
+    }
   }, [map])
 
   const finishDrawing = useCallback(() => {
@@ -50,29 +81,55 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
       coordinates: [coordinates]
     }
 
-    onGeometryComplete(geometry)
-    cleanup()
+    onCompleteRef.current?.(geometry)
+    resetSession()
     restoreMapControls()
-  }, [onGeometryComplete, cleanup, restoreMapControls])
+    wasDrawingRef.current = false
+    setIsActive(false)
+  }, [resetSession, restoreMapControls])
+
+  const cancelDrawing = useCallback(() => {
+    resetSession()
+    restoreMapControls()
+    wasDrawingRef.current = false
+    setIsActive(false)
+    onCancelRef.current?.()
+  }, [resetSession, restoreMapControls])
 
   useEffect(() => {
+    if (!map) return undefined
+
+    // Leaving draw mode — clear session
     if (!isDrawing) {
+      if (wasDrawingRef.current) {
+        resetSession()
+        restoreMapControls()
+        wasDrawingRef.current = false
+      }
       setIsActive(false)
-      restoreMapControls()
-      cleanup()
       return undefined
     }
 
+    const startingFresh = !wasDrawingRef.current
+    wasDrawingRef.current = true
     setIsActive(true)
     map.getContainer().style.cursor = 'crosshair'
     // Double-click finishes the polygon — don't also zoom the map.
     map.doubleClickZoom?.disable()
     map.boxZoom?.disable()
-    pointsRef.current = []
-    markersRef.current = []
-    setPointCount(0)
+    // Keep dragging / scroll zoom so user can pan mid-draw without losing points.
+
+    if (startingFresh) {
+      resetSession()
+    } else {
+      // Effect re-ran (parent re-render / callback identity) — keep points, refresh line
+      setPointCount(pointsRef.current.length)
+      redrawPolyline()
+    }
 
     const handleMapClick = (e) => {
+      // Ignore click that ends a pan/drag
+      if (e.originalEvent?.defaultPrevented) return
       const { lat, lng } = e.latlng
       pointsRef.current.push([lat, lng])
       setPointCount(pointsRef.current.length)
@@ -89,20 +146,7 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
       }).addTo(map)
 
       markersRef.current.push(marker)
-
-      if (polylineRef.current) {
-        map.removeLayer(polylineRef.current)
-      }
-
-      if (pointsRef.current.length > 1) {
-        polylineRef.current = L.polyline(pointsRef.current, {
-          color: '#14b8a6',
-          weight: 2,
-          dashArray: '5, 5',
-          opacity: 0.7,
-          interactive: false
-        }).addTo(map)
-      }
+      redrawPolyline()
     }
 
     const handleDoubleClick = (e) => {
@@ -118,9 +162,6 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
       L.DomEvent.stop(e)
     }
 
-    handlersRef.current.click = handleMapClick
-    handlersRef.current.dblclick = handleDoubleClick
-
     map.on('click', handleMapClick)
     map.on('dblclick', handleDoubleClick)
     map.on('contextmenu', handleContextMenu)
@@ -135,12 +176,9 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
       } catch {
         // Ignore teardown races while MapContainer unmounts.
       }
-      handlersRef.current.click = null
-      handlersRef.current.dblclick = null
-      cleanup()
-      restoreMapControls()
+      // Do NOT reset points here — pan/parent re-render must keep in-progress drawing.
     }
-  }, [isDrawing, map, cleanup, finishDrawing, restoreMapControls])
+  }, [isDrawing, map, resetSession, restoreMapControls, redrawPolyline, finishDrawing])
 
   if (!isActive) {
     return null
@@ -149,7 +187,7 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
   return (
     <div className="draw-controls-overlay">
       <div className="draw-instructions">
-        <p>Click on the map to add points</p>
+        <p>Click on the map to add points (you can pan/zoom while drawing)</p>
         <p>Double-click or click "Finish" to complete</p>
       </div>
       <div className="draw-actions">
@@ -159,16 +197,12 @@ const DrawAreaComponent = ({ isDrawing, onGeometryComplete, onCancel }) => {
           disabled={pointCount < 3}
           type="button"
         >
-          Finish Drawing
+          Finish Drawing ({pointCount})
         </button>
         <button
           className="draw-button cancel-button"
           type="button"
-          onClick={() => {
-            cleanup()
-            restoreMapControls()
-            onCancel()
-          }}
+          onClick={cancelDrawing}
         >
           Cancel
         </button>
