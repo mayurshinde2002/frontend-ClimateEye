@@ -116,6 +116,69 @@
   margin: 0;
 }
 
+.product-section-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(10, 14, 39, 0.65);
+  border: 1px solid rgba(20, 184, 166, 0.25);
+  flex-shrink: 0;
+}
+
+.product-section-tab {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px 20px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(248, 250, 252, 0.55);
+  background: transparent;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.product-section-tab:hover {
+  color: rgba(248, 250, 252, 0.9);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.product-section-tab.is-active {
+  color: #0a0e27;
+  background: #14b8a6;
+}
+
+.dashboard-content--weather {
+  display: flex !important;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.dashboard-content--weather .weather-workspace {
+  flex: 1;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  .product-section-nav {
+    padding: 3px;
+  }
+
+  .product-section-tab {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+}
 
 .header-right {
   display: flex;

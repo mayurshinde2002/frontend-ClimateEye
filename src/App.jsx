@@ -4,6 +4,7 @@ import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import AQIDetailPage from './components/AQIDetailPage'
 import WeatherDetailPage from './components/WeatherDetailPage'
+import AqiCalendarPage from './pages/AqiCalendarPage'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import './App.css'
 
@@ -39,6 +40,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <WeatherDetailPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/aqi-calendar"
+            element={
+              <ProtectedRoute>
+                <AqiCalendarPage />
               </ProtectedRoute>
             }
           />

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CircleMarker, Popup, useMap, useMapEvents } from 'react-leaflet'
+import { Marker, Popup, useMap, useMapEvents } from 'react-leaflet'
+import L from 'leaflet'
 import { aqiInColor, aqiInLabel, fetchSensorsInView } from '../services/aqiInApi'
 import { useLeafletSafeOverlay } from '../hooks/useLeafletSafeOverlay'
 import AqiRankingsPanel from './AqiRankingsPanel'
@@ -17,6 +18,28 @@ const stationAqi = (station) => (
   ?? finite(station?.iaqi?.aqi)
   ?? finite(station?.aqi)
 )
+
+/** Amber/gold AQI bubble with value — matches map style in the sensor view. */
+const aqiBubbleIcon = (score, selected = false) => {
+  const label = score == null ? '—' : String(Math.round(score))
+  const color = score == null ? '#eab308' : aqiInColor(score)
+  const size = selected ? 42 : 36
+  const digits = label.length
+  const fontSize = digits >= 3 ? 11 : 13
+
+  return L.divIcon({
+    className: 'sensor-aqi-marker',
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2],
+    html: `
+      <div class="sensor-aqi-bubble${selected ? ' is-selected' : ''}" style="--aqi-color:${color};--aqi-size:${size}px;--aqi-font:${fontSize}px">
+        <span class="sensor-aqi-bubble-glow" aria-hidden="true"></span>
+        <span class="sensor-aqi-bubble-core">${label}</span>
+      </div>
+    `
+  })
+}
 
 const viewKeyFromMap = (map) => {
   const bounds = map.getBounds()
@@ -118,19 +141,13 @@ const SensorDataLayer = ({ onClose }) => {
         const lng = finite(station.longitude)
         if (lat == null || lng == null) return null
         const score = stationAqi(station)
-        const color = aqiInColor(score)
         const isSelected = selected?.uid === station.uid
         return (
-          <CircleMarker
+          <Marker
             key={station.uid || `${lat}-${lng}`}
-            center={[lat, lng]}
-            radius={isSelected ? 10 : 6}
-            pathOptions={{
-              color: '#ffffff',
-              weight: isSelected ? 3 : 1.5,
-              fillColor: color,
-              fillOpacity: 0.92
-            }}
+            position={[lat, lng]}
+            icon={aqiBubbleIcon(score, isSelected)}
+            zIndexOffset={isSelected ? 800 : 400}
             eventHandlers={{
               click: () => selectStation(station)
             }}
@@ -143,7 +160,7 @@ const SensorDataLayer = ({ onClose }) => {
                 <div className="sensor-popup-hint">Click marker to open details</div>
               </div>
             </Popup>
-          </CircleMarker>
+          </Marker>
         )
       })}
 

@@ -1,0 +1,157 @@
+.weather-mini-map {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  max-height: none;
+  aspect-ratio: auto;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(11, 18, 32, 0.45);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(8px);
+}
+
+.weather-mini-map-leaflet,
+.weather-map-fullscreen-leaflet {
+  width: 100%;
+  height: 100%;
+  background: #0b1220;
+}
+
+.weather-mini-map .leaflet-container,
+.weather-map-fullscreen-stage .leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #0b1220;
+  font: inherit;
+}
+
+.weather-mini-map .leaflet-tile-pane,
+.weather-map-fullscreen-stage .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.88) saturate(0.65);
+}
+
+.weather-mini-map-search {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 52px;
+  z-index: 520;
+}
+
+.weather-mini-map-search .place-search-box {
+  height: 36px;
+  padding: 0 10px;
+  background: rgba(8, 12, 24, 0.88);
+  border-color: rgba(20, 184, 166, 0.35);
+}
+
+.weather-mini-map-search .place-search-box input {
+  font-size: 13px;
+}
+
+.weather-mini-map-search .place-search-results {
+  max-height: 220px;
+}
+
+.weather-mini-map-search--fullscreen {
+  top: 14px;
+  left: 14px;
+  right: 60px;
+  max-width: 360px;
+}
+
+.weather-mini-map-label {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(8, 12, 24, 0.82);
+  color: #99f6e4;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  max-width: calc(100% - 52px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weather-mini-map-label--lg {
+  font-size: 0.85rem;
+  padding: 6px 12px;
+}
+
+.weather-mini-map-expand {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 510;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(248, 250, 252, 0.28);
+  border-radius: 8px;
+  background: rgba(8, 12, 24, 0.78);
+  color: #f8fafc;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.weather-mini-map-expand:hover {
+  background: rgba(20, 184, 166, 0.22);
+  border-color: rgba(20, 184, 166, 0.55);
+  color: #99f6e4;
+}
+
+.weather-mini-map--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(232, 238, 248, 0.55);
+  font-size: 0.85rem;
+}
+
+.weather-map-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 12, 24, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.weather-map-fullscreen-stage {
+  position: relative;
+  width: min(920px, 100%);
+  height: min(720px, 100%);
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(20, 184, 166, 0.35);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.weather-map-fullscreen-close {
+  width: 36px;
+  height: 36px;
+}
+
+@media (max-width: 960px) {
+  .weather-mini-map {
+    width: 100%;
+    height: auto;
+    min-height: 220px;
+  }
+}

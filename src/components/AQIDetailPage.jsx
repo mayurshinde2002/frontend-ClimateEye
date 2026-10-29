@@ -5,8 +5,6 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import * as XLSX from 'xlsx'
 import { fetchHourlyAQIData, fetchHourlyWeatherData, fetchHourlyAQIDataRange, calculateGeometryCenter } from '../services/api'
 import { transformRecordsByHeight } from '../utils/dataTransformers'
-import HourlyAQICards from './HourlyAQICards'
-import WindDirectionView from './WindDirectionView'
 import './AQIDetailPage.css'
 
 const AQIDetailPage = () => {
@@ -723,23 +721,6 @@ const AQIDetailPage = () => {
           Next →
         </button>
       </div>
-
-      {coordinates && (
-        <WindDirectionView
-          latitude={coordinates.latitude}
-          longitude={coordinates.longitude}
-          date={selectedDate}
-        />
-      )}
-
-      {/* Hourly AQI Cards for Daily Mode */}
-      {dailyMode && coordinates && (
-        <HourlyAQICards 
-          geometry={geometry} 
-          date={selectedDate}
-          selectedHeight={selectedHeight}
-        />
-      )}
 
       {/* Data Visualization Section - Only show when not in daily mode */}
       {!dailyMode && (

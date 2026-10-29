@@ -9,6 +9,7 @@
  * - GET /aqi/v2/getLast24HourHistory?slug=&sensorname=AQI-IN&slugType=cityId&source=web
  * - GET /aqi/getLast7DaysHistory?slug=&sensorname=AQI-IN&slugType=cityId|locationId&source=web
  * - GET /aqi/getLast30DaysHistory?slug=&sensorname=AQI-IN&slugType=cityId&source=web
+ * - GET /aqi/v2/getAqiCalender?slug=&slugType=cityId&sensorname=AQI-IN&year=&source=web
  *
  * type=0 / type=3 on nearest → 400. Many other guessed paths → 404.
  */
@@ -532,6 +533,43 @@ export const resolveHistorySlug = (place) => {
   return null
 }
 
+/**
+ * Resolve nearest aqi.in city (slug + display name) from map coordinates.
+ * Used when the user draws an AOI and opens the AQI calendar.
+ */
+export const resolveCityFromCoords = async (latitude, longitude) => {
+  const lat = Number(latitude)
+  const lng = Number(longitude)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    throw new Error('Valid coordinates are required to resolve a city')
+  }
+
+  const [cityResult, stationResult] = await Promise.all([
+    fetchNearestLocation(lat, lng, AQI_IN_TYPES.CITY).catch(() => ({ items: [] })),
+    fetchNearestLocation(lat, lng, AQI_IN_TYPES.STATION).catch(() => ({ items: [] }))
+  ])
+
+  const city = cityResult.items?.[0] || null
+  const station = stationResult.items?.[0] || null
+  const resolved = resolveHistorySlug(city) || resolveHistorySlug(station)
+  if (!resolved?.slug) {
+    throw new Error('No aqi.in city found near the drawn area')
+  }
+
+  const cityName = String(city?.city || city?.location || resolved.title || '')
+    .trim()
+    .toLowerCase()
+
+  return {
+    ...resolved,
+    title: String(resolved.title || cityName).trim().toLowerCase(),
+    latitude: Number(city?.latitude ?? station?.latitude ?? lat),
+    longitude: Number(city?.longitude ?? station?.longitude ?? lng),
+    cityName,
+    raw: city || station
+  }
+}
+
 const formatHistoryTick = (iso, rangeId) => {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return String(iso)
@@ -620,6 +658,314 @@ export const fetchAqiHistory = async (
     endLabel: points.length
       ? new Date(points[points.length - 1].time).toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: 'numeric' })
       : '',
+    fetchedAt: new Date().toISOString()
+  }
+}
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+]
+
+const monthIndexFromKey = (key) => {
+  const raw = String(key || '').trim()
+  const asNum = Number(raw)
+  if (Number.isFinite(asNum) && asNum >= 1 && asNum <= 12) return asNum - 1
+  if (Number.isFinite(asNum) && asNum >= 0 && asNum <= 11 && String(raw) === String(asNum)) {
+    // 0-based month index
+    return asNum
+  }
+  const lower = raw.toLowerCase()
+  return MONTH_NAMES.findIndex((name) => lower.startsWith(name.slice(0, 3).toLowerCase()))
+}
+
+/** Parse date-like values into { year, monthIndex 0-11, day }. */
+const parseCalendarDate = (value) => {
+  if (value == null || value === '') return null
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    // unix seconds vs ms
+    const ms = value > 1e12 ? value : value > 1e9 ? value * 1000 : null
+    if (ms) {
+      const d = new Date(ms)
+      if (!Number.isNaN(d.getTime())) {
+        return { year: d.getUTCFullYear(), monthIndex: d.getUTCMonth(), day: d.getUTCDate() }
+      }
+    }
+  }
+
+  const text = String(value).trim()
+  // YYYY-MM-DD or YYYY/MM/DD
+  let match = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
+  if (match) {
+    return {
+      year: Number(match[1]),
+      monthIndex: Number(match[2]) - 1,
+      day: Number(match[3])
+    }
+  }
+  // DD-MM-YYYY or DD/MM/YYYY
+  match = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/)
+  if (match) {
+    return {
+      year: Number(match[3]),
+      monthIndex: Number(match[2]) - 1,
+      day: Number(match[1])
+    }
+  }
+
+  const d = new Date(text)
+  if (!Number.isNaN(d.getTime())) {
+    return { year: d.getFullYear(), monthIndex: d.getMonth(), day: d.getDate() }
+  }
+  return null
+}
+
+const emptyMonthBuckets = () => (
+  MONTH_NAMES.map((name, index) => ({
+    month: index + 1,
+    name,
+    days: []
+  }))
+)
+
+const pushDay = (buckets, monthIndex, entry) => {
+  if (monthIndex < 0 || monthIndex > 11 || !entry) return
+  buckets[monthIndex].days.push(entry)
+}
+
+/**
+ * Build one calendar day. Month must come from a real date / month field —
+ * never dump unknown rows into January.
+ */
+const calendarDayFromItem = (raw, yearHint, forcedMonthIndex = null) => {
+  if (raw == null) return null
+
+  if (typeof raw === 'number' || (typeof raw === 'string' && raw !== '' && Number.isFinite(Number(raw)))) {
+    if (forcedMonthIndex == null) return null
+    const aqi = Number(raw)
+    if (!Number.isFinite(aqi)) return null
+    return {
+      monthIndex: forcedMonthIndex,
+      day: null,
+      aqi,
+      color: aqiInColor(aqi),
+      date: null
+    }
+  }
+
+  if (typeof raw !== 'object') return null
+
+  const aqi = Number(
+    raw.aqi ?? raw.AQI ?? raw.value ?? raw.avg ?? raw.average ?? raw['AQI-IN'] ?? raw.aqiValue
+  )
+  if (!Number.isFinite(aqi)) return null
+
+  // aqi.in calendar rows look like: { day: "2026-01-01", value: 219 }
+  const dateInfo = parseCalendarDate(
+    raw.dateString
+    ?? raw.fullDate
+    ?? raw.timestamp
+    ?? raw.time
+    ?? raw.datetime
+    ?? raw.created_at
+    ?? (typeof raw.day === 'string' ? raw.day : null)
+    ?? (typeof raw.date === 'string' || (typeof raw.date === 'number' && raw.date > 31) ? raw.date : null)
+  )
+
+  let monthIndex = forcedMonthIndex
+  if (monthIndex == null && dateInfo) monthIndex = dateInfo.monthIndex
+  if (monthIndex == null) {
+    const fromField = monthIndexFromKey(raw.month ?? raw.Month ?? raw.monthIndex ?? raw.mon)
+    if (fromField >= 0) monthIndex = fromField
+  }
+  if (monthIndex == null || monthIndex < 0 || monthIndex > 11) return null
+
+  let day = dateInfo?.day ?? null
+  if (!Number.isFinite(day) && typeof raw.day === 'number' && raw.day >= 1 && raw.day <= 31) {
+    day = raw.day
+  }
+  if (!Number.isFinite(day) && typeof raw.Day === 'number') day = raw.Day
+  if (!Number.isFinite(day) && typeof raw.date === 'number' && raw.date >= 1 && raw.date <= 31) {
+    day = raw.date
+  }
+
+  const year = dateInfo?.year || yearHint
+  const dateLabel = dateInfo
+    ? `${dateInfo.year}-${String(dateInfo.monthIndex + 1).padStart(2, '0')}-${String(dateInfo.day).padStart(2, '0')}`
+    : (Number.isFinite(day)
+      ? `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+      : null)
+
+  return {
+    monthIndex,
+    day: Number.isFinite(day) ? day : null,
+    aqi,
+    color: aqiInColor(aqi),
+    date: dateLabel
+  }
+}
+
+const finalizeMonthBuckets = (buckets) => (
+  buckets.map((month) => ({
+    ...month,
+    days: [...month.days]
+      .map((d, index) => ({
+        day: d.day ?? index + 1,
+        aqi: d.aqi,
+        color: d.color,
+        date: d.date
+      }))
+      .sort((a, b) => (a.day || 0) - (b.day || 0))
+  }))
+)
+
+/** Collect day rows from common aqi.in calendar payload shapes. */
+const collectCalendarItems = (block, yearNum) => {
+  const items = []
+
+  // Parallel arrays (same pattern as history endpoints)
+  const values = block?.averageArray || block?.aqiArray || block?.values || block?.aqi
+  const times = block?.timeArray || block?.dateArray || block?.dates || block?.times
+  if (Array.isArray(values) && Array.isArray(times) && values.length && times.length) {
+    const length = Math.min(values.length, times.length)
+    for (let i = 0; i < length; i += 1) {
+      items.push({ aqi: values[i], date: times[i], time: times[i] })
+    }
+    return items
+  }
+
+  if (Array.isArray(block)) {
+    return block
+  }
+
+  if (!block || typeof block !== 'object') return items
+
+  // Explicit month maps: { January: [...], "1": [...], ... }
+  let foundMonthMap = false
+  MONTH_NAMES.forEach((name, index) => {
+    const keyCandidates = [
+      name,
+      name.toLowerCase(),
+      name.slice(0, 3),
+      name.slice(0, 3).toLowerCase(),
+      String(index + 1),
+      String(index + 1).padStart(2, '0')
+    ]
+    const source = block.months || block.Months || block.calendar || block
+    for (const key of keyCandidates) {
+      const list = source?.[key]
+      if (Array.isArray(list)) {
+        foundMonthMap = true
+        list.forEach((row) => {
+          items.push(
+            typeof row === 'object' && row
+              ? { ...row, month: row.month ?? index + 1 }
+              : { aqi: row, month: index + 1, day: undefined }
+          )
+        })
+        break
+      }
+      if (list && typeof list === 'object') {
+        const nested = list.days || list.data || list.values
+        if (Array.isArray(nested)) {
+          foundMonthMap = true
+          nested.forEach((row) => {
+            items.push(
+              typeof row === 'object' && row
+                ? { ...row, month: row.month ?? index + 1 }
+                : { aqi: row, month: index + 1 }
+            )
+          })
+          break
+        }
+      }
+    }
+  })
+  if (foundMonthMap) return items
+
+  // Flat list under a known key
+  const flat = block.days || block.data || block.records || block.list || block.calendarData
+  if (Array.isArray(flat)) return flat
+
+  return items
+}
+
+/**
+ * Yearly AQI calendar for a city slug (aqi.in path spelling: getAqiCalender).
+ */
+export const fetchAqiCalendar = async ({
+  slug,
+  year,
+  slugType = 'cityId',
+  sensorname = 'AQI-IN',
+  source = 'web'
+} = {}) => {
+  if (!slug) throw new Error('Calendar slug is required')
+  const yearNum = Number(year) || new Date().getFullYear()
+
+  const params = new URLSearchParams({
+    slug: String(slug),
+    slugType: String(slugType),
+    sensorname: String(sensorname),
+    year: String(yearNum),
+    source: String(source)
+  })
+
+  const response = await fetch(
+    `${AQI_IN_BASE}/aqi/v2/getAqiCalender?${params.toString()}`,
+    { method: 'GET', headers: authHeaders() }
+  )
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(text || `aqi.in calendar error ${response.status}`)
+  }
+
+  const payload = await response.json()
+  const block = payload?.data ?? payload?.Data ?? payload
+  const buckets = emptyMonthBuckets()
+  const rows = collectCalendarItems(block, yearNum)
+
+  rows.forEach((row) => {
+    const forcedMonth = monthIndexFromKey(row?.month ?? row?.Month)
+    const entry = calendarDayFromItem(
+      row,
+      yearNum,
+      forcedMonth >= 0 ? forcedMonth : null
+    )
+    if (!entry) return
+    // Keep rows for the requested year when a date year is present
+    if (entry.date) {
+      const parsed = parseCalendarDate(entry.date)
+      if (parsed && parsed.year !== yearNum) return
+    }
+    pushDay(buckets, entry.monthIndex, entry)
+  })
+
+  const months = finalizeMonthBuckets(buckets)
+  const allDays = months.flatMap((m) => m.days)
+  let minAqi = null
+  let maxAqi = null
+  let sum = 0
+  allDays.forEach((d) => {
+    if (!Number.isFinite(d.aqi)) return
+    if (minAqi == null || d.aqi < minAqi) minAqi = d.aqi
+    if (maxAqi == null || d.aqi > maxAqi) maxAqi = d.aqi
+    sum += d.aqi
+  })
+
+  return {
+    status: payload.status,
+    message: payload.message,
+    year: yearNum,
+    slug,
+    slugType,
+    months,
+    dayCount: allDays.length,
+    minAqi,
+    maxAqi,
+    avgAqi: allDays.length ? Math.round(sum / allDays.length) : null,
     fetchedAt: new Date().toISOString()
   }
 }

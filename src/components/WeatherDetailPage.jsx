@@ -4,10 +4,7 @@ import { format, parseISO, isToday, startOfDay } from 'date-fns'
 import * as XLSX from 'xlsx'
 import { fetchHourlyWeatherData, calculateGeometryCenter } from '../services/api'
 import { transformRecordsByHeight } from '../utils/dataTransformers'
-import MonthlyWeatherCalendar from './MonthlyWeatherCalendar'
 import WeatherMetricsCards from './WeatherMetricsCards'
-import WindDirectionView from './WindDirectionView'
-import HourlyAQICards from './HourlyAQICards'
 import './WeatherDetailPage.css'
 
 const WeatherDetailPage = () => {
@@ -234,28 +231,6 @@ const WeatherDetailPage = () => {
       </div>
 
 
-      {/* Monthly Weather Calendar or Hourly AQI Cards */}
-      {coordinates && (
-        dailyMode ? (
-          <HourlyAQICards 
-            geometry={geometry} 
-            date={selectedDate}
-          />
-          // <div>
-          //   <h1>Hourly AQI Cards</h1>
-          // </div>
-        ) : (
-          <MonthlyWeatherCalendar 
-            geometry={geometry} 
-            selectedDate={selectedDate}
-            weeklyMode={weeklyMode}
-            startDate={startDate}
-            endDate={endDate}
-            selectedHeight={selectedHeight}
-          />
-        )
-      )}
-
       {/* Date Navigation */}
       <div className="date-navigation">
         <button 
@@ -287,11 +262,6 @@ const WeatherDetailPage = () => {
             geometry={geometry}
             date={selectedDate}
             isLive={isToday(parseISO(selectedDate))}
-          />
-          <WindDirectionView
-            latitude={coordinates.latitude}
-            longitude={coordinates.longitude}
-            date={selectedDate}
           />
         </>
       )}

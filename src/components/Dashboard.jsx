@@ -9,8 +9,10 @@ import PlaceSearch from './PlaceSearch'
 import AreaPollutantsPanel from './AreaPollutantsPanel'
 import WeatherSection from './WeatherSection'
 import AQISection from './AQISection'
+import WeatherWorkspace from './WeatherWorkspace'
 import LiveDashboardCards from './LiveDashboardCards'
 import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData, fetchMethaneCatalog, fetchMethanePlumes, fetchMethaneTiles, boundsFromGeometry, resolveMethaneDateRange } from '../services/api'
+import { resolveCityFromCoords } from '../services/aqiInApi'
 import './Dashboard.css'
 import './DatePicker.css'
 import './Building3DView.css'
@@ -26,7 +28,7 @@ const Dashboard = () => {
 
   const [startDate, setStartDate] = useState(format(oneWeekAgo, 'yyyy-MM-dd'))
   const [endDate, setEndDate] = useState(format(today, 'yyyy-MM-dd'))
-  const [viewType, setViewType] = useState('satellite')
+  const [viewType, setViewType] = useState('dark')
   const [basemapMenuOpen, setBasemapMenuOpen] = useState(false)
   const [layersMenuOpen, setLayersMenuOpen] = useState(false)
   const layersMenuRef = useRef(null)
@@ -60,6 +62,9 @@ const Dashboard = () => {
   const [locateState, setLocateState] = useState({ locating: false, active: false, error: null })
   const [leafletMap, setLeafletMap] = useState(null)
   const [searchedPlace, setSearchedPlace] = useState(null)
+  const [calendarResolving, setCalendarResolving] = useState(false)
+  /** Top-level product section: AQI tools vs Weather workspace (built in parallel). */
+  const [productSection, setProductSection] = useState('aqi')
   
   // Refs to prevent multiple simultaneous API calls
   const isFetchingRef = useRef(false)
@@ -89,13 +94,31 @@ const Dashboard = () => {
     return () => clearInterval(interval)
   }, [])
 
+  // Restore AOI when returning from AQI Calendar (Change area / Dashboard)
+  useEffect(() => {
+    if (!location.state?.restoreAoi) return
+
+    const geometry = location.state.geometry
+    const kml = location.state.kml || location.state.uploadedKML
+
+    if (kml?.content) {
+      setUploadedKML({ name: kml.name || 'Uploaded KML', content: kml.content })
+      setDrawnGeometry(null)
+    } else if (geometry?.coordinates) {
+      setDrawnGeometry(geometry)
+      setUploadedKML(null)
+    }
+
+    navigate(location.pathname, { replace: true, state: {} })
+  }, [location.state, navigate])
+
   // Restore analysis view when navigating back from detail page
   useEffect(() => {
     if (location.state?.restoreAnalysis) {
       // Restore the analysis state
       if (location.state.geometry) {
         // If geometry is provided, restore it
-        if (location.state.geometry.type === 'Polygon') {
+        if (location.state.geometry.type === 'Polygon' || location.state.geometry.type === 'MultiPolygon') {
           setDrawnGeometry(location.state.geometry)
         }
       }
@@ -321,8 +344,13 @@ const Dashboard = () => {
     setShowSensorData((on) => !on)
   }
 
-  const activeLayerCount = [showTemperature, showRain, showWind, showAqi, showSensorData]
-    .filter(Boolean).length
+  const activeLayerCount = [
+    showTemperature,
+    showRain,
+    showWind,
+    showAqi,
+    showSensorData
+  ].filter(Boolean).length
 
   useEffect(() => {
     if (!layersMenuOpen) return undefined
@@ -497,6 +525,55 @@ const Dashboard = () => {
     // Drawn area → building focus; otherwise tilt the current map view into 3D.
     if (!selectedGeometry && !mapView) return
     setShow3DView(true)
+  }
+
+  const handleOpenAqiCalendar = async () => {
+    if (!selectedGeometry) {
+      window.alert('Draw an area (or upload a KML) first, then open AQI Calendar.')
+      return
+    }
+
+    const center = calculateGeometryCenter(selectedGeometry)
+    const latitude = center?.latitude
+    const longitude = center?.longitude
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      window.alert('Could not read the center of the drawn area. Try drawing again.')
+      return
+    }
+
+    setCalendarResolving(true)
+    try {
+      const place = await resolveCityFromCoords(latitude, longitude)
+      const year = new Date().getFullYear()
+      const params = new URLSearchParams({
+        slug: place.slug,
+        slugType: place.slugType || 'cityId',
+        name: String(place.cityName || place.title || place.slug || '').toLowerCase(),
+        year: String(year),
+        lat: String(latitude),
+        lng: String(longitude)
+      })
+      const aoiPayload = {
+        geometry: selectedGeometry,
+        source: uploadedKML ? 'kml' : 'draw',
+        kml: uploadedKML
+          ? { name: uploadedKML.name, content: uploadedKML.content }
+          : null
+      }
+      try {
+        sessionStorage.setItem('climateeye-aqi-calendar-aoi', JSON.stringify(aoiPayload))
+      } catch {
+        // Ignore quota / private-mode failures; navigate state still carries geometry.
+      }
+      navigate(`/aqi-calendar?${params.toString()}`, {
+        state: aoiPayload
+      })
+    } catch (err) {
+      window.alert(err.message || 'Could not resolve city for this area')
+    } finally {
+      setCalendarResolving(false)
+    }
   }
 
   // Helper function to aggregate hourly data
@@ -1408,6 +1485,25 @@ const Dashboard = () => {
             <h1 className="logo-text">Climate Eye</h1>
           </div>
         </div>
+
+        <nav className="product-section-nav" aria-label="Product sections">
+          <button
+            type="button"
+            className={`product-section-tab${productSection === 'aqi' ? ' is-active' : ''}`}
+            onClick={() => setProductSection('aqi')}
+            aria-pressed={productSection === 'aqi'}
+          >
+            AQI
+          </button>
+          <button
+            type="button"
+            className={`product-section-tab${productSection === 'weather' ? ' is-active' : ''}`}
+            onClick={() => setProductSection('weather')}
+            aria-pressed={productSection === 'weather'}
+          >
+            Weather
+          </button>
+        </nav>
         
         <div className="header-right">
           <button className="logout-button" onClick={handleLogout}>
@@ -1421,6 +1517,11 @@ const Dashboard = () => {
         </div>
       </header>
 
+      {productSection === 'weather' ? (
+        <div className="dashboard-content dashboard-content--map-full dashboard-content--weather">
+          <WeatherWorkspace />
+        </div>
+      ) : (
       <div className={`dashboard-content${!showAnalysis ? ' dashboard-content--map-full' : ''}`}>
         <main className="main-content">
           {!showAnalysis && show3DView && (selectedGeometry || mapView) ? (
@@ -1479,6 +1580,27 @@ const Dashboard = () => {
                       <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
                     </svg>
                     <span className="view-toggle-label">Locate me</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`view-toggle-button${calendarResolving ? ' active' : ''}${selectedGeometry ? '' : ' is-disabled'}`}
+                    onClick={handleOpenAqiCalendar}
+                    disabled={!selectedGeometry || calendarResolving}
+                    title={
+                      selectedGeometry
+                        ? 'Open month-wise AQI for the city nearest your drawn area'
+                        : 'Draw an area (or upload a KML) to enable AQI Calendar'
+                    }
+                    aria-disabled={!selectedGeometry || calendarResolving}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+                      <path d="M16 2v4M8 2v4M3 10h18"></path>
+                    </svg>
+                    <span className="view-toggle-label">
+                      {calendarResolving ? 'Resolving…' : 'AQI Calendar'}
+                    </span>
                   </button>
                 </div>
 
@@ -2129,6 +2251,7 @@ const Dashboard = () => {
           )}
         </main>
       </div>
+      )}
     </div>
   )
 }

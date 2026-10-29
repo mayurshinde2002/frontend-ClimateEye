@@ -51,30 +51,45 @@ export const BASEMAPS = {
   dark: {
     id: 'dark',
     label: 'Dark',
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+    // Free OSM tiles + CSS dark filter (no API key / Carto)
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     labels: false,
-    maxZoom: 19
+    maxZoom: 19,
+    darkFilter: true
   }
 }
 
 const LABEL_TILE_LAYER = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
 
-// Component to handle map view changes and zoom to bounds
-const MapViewUpdater = ({ polygonCoordinates, methanePoints }) => {
+// Fit map only when needed (KML / methane). Manual draw keeps the current zoom.
+const MapViewUpdater = ({ polygonCoordinates, methanePoints, autoFitPolygon = false }) => {
   const map = useMap()
-  
+  const lastFitKeyRef = useRef('')
+
   useEffect(() => {
+    const polygonPoints = autoFitPolygon ? (polygonCoordinates || []) : []
     const points = [
-      ...(polygonCoordinates || []),
+      ...polygonPoints,
       ...(methanePoints || [])
     ]
-    if (points.length > 0) {
-      const bounds = L.latLngBounds(points)
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 11 })
+    if (!points.length) {
+      lastFitKeyRef.current = ''
+      return
     }
-  }, [polygonCoordinates, methanePoints, map])
-  
+
+    const fitKey = `${autoFitPolygon ? 'kml' : 'methane'}:${points.length}:${points[0]?.[0]}:${points[0]?.[1]}`
+    if (fitKey === lastFitKeyRef.current) return
+    lastFitKeyRef.current = fitKey
+
+    const bounds = L.latLngBounds(points)
+    if (!bounds.isValid()) return
+
+    // Never force a zoom-out below the user's current level for small areas
+    const maxZoom = Math.max(map.getZoom() || 12, 15)
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom, animate: true })
+  }, [polygonCoordinates, methanePoints, autoFitPolygon, map])
+
   return null
 }
 
@@ -465,10 +480,10 @@ const MapComponent = ({
     }
   }
 
-  const basemap = BASEMAPS[viewType] || BASEMAPS.satellite
+  const basemap = BASEMAPS[viewType] || BASEMAPS.dark
 
   return (
-    <div className="map-container">
+    <div className={`map-container${basemap.darkFilter ? ' map-container--dark-osm' : ''}`}>
       <MapContainer
         ref={setMap}
         center={mapCenter}
@@ -478,7 +493,11 @@ const MapComponent = ({
       >
         <MapPanes />
         <MapInteractionFix />
-        <MapViewUpdater polygonCoordinates={polygonCoordinates} methanePoints={methanePoints} />
+        <MapViewUpdater
+          polygonCoordinates={polygonCoordinates}
+          methanePoints={methanePoints}
+          autoFitPolygon={Boolean(uploadedKML)}
+        />
         <MapCenterWatcher onCenter={handleViewCenter} onView={onMapView} />
 
         {showWind && <RegionalWindMap />}
