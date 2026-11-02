@@ -1,6 +1,25 @@
-import { ringCentroid } from '../utils/polygonIndex'
+import { pointInGeometry, ringCentroid } from '../utils/polygonIndex'
 
 const API_BASE_URL = import.meta.env.DEV ? '/api' : 'https://climateye-apis.up.railway.app/api'
+const OPEN_METEO_AIR_BASE = import.meta.env.DEV
+  ? '/air-quality-api'
+  : 'https://air-quality-api.open-meteo.com'
+
+/** CAMS global methane is coarse (~0.4°). Sample AOI at ~0.2° for a smooth field. */
+const CAMS_METHANE_GRID_DEG = 0.2
+const CAMS_METHANE_MAX_SAMPLES = 25
+const CAMS_METHANE_CONCURRENCY = 4
+const CAMS_METHANE_PALETTE = [
+  '#000004',
+  '#1b0c41',
+  '#4a0c6b',
+  '#781c6d',
+  '#a52c60',
+  '#cf4446',
+  '#ed6925',
+  '#fb9b06',
+  '#fcffa4'
+]
 
 /**
  * Calculate the center point (centroid) of a polygon geometry
@@ -602,5 +621,394 @@ export const fetchMethanePlumes = async (query) => {
 export const fetchMethaneTiles = async (query) => {
   const response = await fetch(`${API_BASE_URL}/methane/tiles?${methaneQuery(query)}`)
   return readApiJson(response)
+}
+
+const geometryBBox = (geometry) => {
+  const ring = geometry?.coordinates?.[0]
+  if (!ring?.length) return null
+  let minLng = Infinity
+  let minLat = Infinity
+  let maxLng = -Infinity
+  let maxLat = -Infinity
+  ring.forEach(([lng, lat]) => {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
+    minLng = Math.min(minLng, lng)
+    maxLng = Math.max(maxLng, lng)
+    minLat = Math.min(minLat, lat)
+    maxLat = Math.max(maxLat, lat)
+  })
+  if (!Number.isFinite(minLng)) return null
+  return { minLng, minLat, maxLng, maxLat }
+}
+
+/**
+ * Sample points inside the AOI for CAMS methane (one Open-Meteo call per point).
+ */
+export const sampleCamsMethanePoints = (geometry) => {
+  const bbox = geometryBBox(geometry)
+  if (!bbox) return []
+
+  const { minLng, minLat, maxLng, maxLat } = bbox
+  const points = []
+  const seen = new Set()
+
+  const push = (lat, lng) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
+    if (!pointInGeometry([lng, lat], geometry)) return
+    const key = `${lat.toFixed(3)},${lng.toFixed(3)}`
+    if (seen.has(key)) return
+    seen.add(key)
+    points.push({ latitude: lat, longitude: lng })
+  }
+
+  const startLng = Math.floor(minLng / CAMS_METHANE_GRID_DEG) * CAMS_METHANE_GRID_DEG
+  const startLat = Math.floor(minLat / CAMS_METHANE_GRID_DEG) * CAMS_METHANE_GRID_DEG
+  for (let lat = startLat; lat <= maxLat + 1e-9; lat += CAMS_METHANE_GRID_DEG) {
+    for (let lng = startLng; lng <= maxLng + 1e-9; lng += CAMS_METHANE_GRID_DEG) {
+      push(lat + CAMS_METHANE_GRID_DEG / 2, lng + CAMS_METHANE_GRID_DEG / 2)
+      if (points.length >= CAMS_METHANE_MAX_SAMPLES) return points
+    }
+  }
+
+  if (!points.length) {
+    const centroid = ringCentroid(geometry)
+    if (centroid) push(centroid[1], centroid[0])
+    if (!points.length) push((minLat + maxLat) / 2, (minLng + maxLng) / 2)
+  }
+
+  return points
+}
+
+const pickCurrentMethane = (hourly) => {
+  const times = hourly?.time || []
+  const values = hourly?.methane || []
+  if (!times.length || !values.length) return { value: null, time: null, index: -1 }
+
+  const now = Date.now()
+  let bestIdx = -1
+  let bestDiff = Infinity
+  times.forEach((t, i) => {
+    if (values[i] == null || !Number.isFinite(Number(values[i]))) return
+    const diff = Math.abs(new Date(t).getTime() - now)
+    if (diff < bestDiff) {
+      bestDiff = diff
+      bestIdx = i
+    }
+  })
+
+  if (bestIdx < 0) {
+    for (let i = values.length - 1; i >= 0; i -= 1) {
+      if (values[i] != null && Number.isFinite(Number(values[i]))) {
+        bestIdx = i
+        break
+      }
+    }
+  }
+
+  if (bestIdx < 0) return { value: null, time: null, index: -1 }
+  return {
+    value: Number(values[bestIdx]),
+    time: times[bestIdx] || null,
+    index: bestIdx
+  }
+}
+
+const mapPool = async (items, limit, worker) => {
+  const results = new Array(items.length)
+  let next = 0
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next
+      next += 1
+      results[i] = await worker(items[i], i)
+    }
+  })
+  await Promise.all(runners)
+  return results
+}
+
+export const fetchOpenMeteoMethanePoint = async (latitude, longitude, { pastDays = 2, forecastDays = 1 } = {}) => {
+  const params = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    hourly: 'methane',
+    timezone: 'auto',
+    past_days: String(pastDays),
+    forecast_days: String(forecastDays)
+  })
+  const response = await fetch(`${OPEN_METEO_AIR_BASE}/v1/air-quality?${params}`)
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.reason || data.error || `Methane request failed (${response.status})`)
+  }
+  const current = pickCurrentMethane(data.hourly)
+  const hourly = (data.hourly?.time || []).map((time, i) => ({
+    time,
+    methane: data.hourly?.methane?.[i] == null ? null : Number(data.hourly.methane[i])
+  }))
+  return {
+    latitude: data.latitude ?? latitude,
+    longitude: data.longitude ?? longitude,
+    elevation: data.elevation ?? null,
+    methane_ug_m3: current.value,
+    observed_at: current.time,
+    unit: data.hourly_units?.methane || 'μg/m³',
+    hourly
+  }
+}
+
+/**
+ * Live / hourly CAMS methane for every sample inside the drawn geometry.
+ */
+export const fetchOpenMeteoMethaneForGeometry = async (geometry) => {
+  const samples = sampleCamsMethanePoints(geometry)
+  if (!samples.length) {
+    throw new Error('Could not sample points inside the selected area')
+  }
+
+  const settled = await mapPool(samples, CAMS_METHANE_CONCURRENCY, async (pt) => {
+    try {
+      return await fetchOpenMeteoMethanePoint(pt.latitude, pt.longitude)
+    } catch (err) {
+      return { error: err.message, latitude: pt.latitude, longitude: pt.longitude }
+    }
+  })
+
+  const ok = settled.filter((r) => r && r.methane_ug_m3 != null)
+  const failed = settled.filter((r) => r?.error)
+
+  if (!ok.length) {
+    throw new Error(failed[0]?.error || 'Open-Meteo returned empty methane values for this area')
+  }
+
+  const features = ok.map((row, i) => ({
+    type: 'Feature',
+    id: `cams-ch4-${i}`,
+    geometry: {
+      type: 'Point',
+      coordinates: [row.longitude, row.latitude]
+    },
+    properties: {
+      source: 'open-meteo',
+      mode: 'cams-hourly',
+      methane_ug_m3: row.methane_ug_m3,
+      methane_enhancement_ppm_m: row.methane_ug_m3,
+      observed_at: row.observed_at,
+      elevation_m: row.elevation,
+      unit: row.unit || 'μg/m³',
+      confidence: 'model',
+      hourly: row.hourly || []
+    }
+  }))
+
+  const values = features.map((f) => f.properties.methane_ug_m3)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const pad = Math.max(5, (max - min) * 0.2 || 20)
+  const centerHourly = ok[0]?.hourly || []
+
+  return {
+    mode: 'cams-hourly',
+    features,
+    count: features.length,
+    samplesRequested: samples.length,
+    failed: failed.length,
+    attribution: 'Open-Meteo · CAMS methane',
+    legend: {
+      title: 'Live methane',
+      unit: 'μg/m³',
+      min: Math.max(0, Math.floor(min - pad)),
+      max: Math.ceil(max + pad),
+      palette: CAMS_METHANE_PALETTE
+    },
+    hourly: centerHourly,
+    note:
+      features.length <= 1
+        ? 'CAMS ambient methane filled across your drawn area (hourly μg/m³). One model cell often covers the whole AOI.'
+        : `${features.length} CAMS samples fused into an area methane field (hourly μg/m³).`,
+    dateLabel: ok[0]?.observed_at
+      ? `Near ${String(ok[0].observed_at).replace('T', ' ')}`
+      : 'Hourly CAMS'
+  }
+}
+
+const EMIT_GHG_BASE = import.meta.env.DEV
+  ? '/ghgcenter'
+  : 'https://earth.gov/ghgcenter'
+
+const EMIT_COLLECTION = 'emit-ch4plume-v1'
+const EMIT_MAX_PLUMES = 8
+const EMIT_PLUME_PALETTE = [
+  '#000004',
+  '#1b0c41',
+  '#4a0c6b',
+  '#781c6d',
+  '#a52c60',
+  '#cf4446',
+  '#ed6925',
+  '#fb9b06',
+  '#fcffa4'
+]
+
+const rewriteEmitUrl = (url) => {
+  if (!url || !import.meta.env.DEV) return url
+  return String(url).replace('https://earth.gov/ghgcenter', '/ghgcenter')
+}
+
+const emitBboxCenter = (bbox) => {
+  if (!Array.isArray(bbox) || bbox.length < 4) return null
+  const [minLng, minLat, maxLng, maxLat] = bbox.map(Number)
+  if (![minLng, minLat, maxLng, maxLat].every(Number.isFinite)) return null
+  return {
+    lng: (minLng + maxLng) / 2,
+    lat: (minLat + maxLat) / 2
+  }
+}
+
+const fetchEmitTileJson = async (itemId) => {
+  const params = new URLSearchParams({
+    assets: 'ch4-plume-emissions',
+    colormap_name: 'magma',
+    rescale: '1,1500',
+    nodata: '-9999',
+    resampling: 'bilinear',
+    color_formula: 'gamma r 1.05'
+  })
+  const url =
+    `${EMIT_GHG_BASE}/api/raster/collections/${EMIT_COLLECTION}/items/` +
+    `${encodeURIComponent(itemId)}/WebMercatorQuad/tilejson.json?${params}`
+  const response = await fetch(url)
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || `EMIT tile request failed (${response.status})`)
+  }
+  const tileTemplate = rewriteEmitUrl(data.tiles?.[0])
+  return {
+    itemId,
+    tileUrl: tileTemplate || null,
+    bounds: data.bounds || null,
+    center: data.center || null
+  }
+}
+
+/**
+ * Public NASA EMIT methane plumes for a bbox (origin markers + spread tiles).
+ * Observation-based — not hourly.
+ */
+export const fetchEmitMethanePlumes = async ({ bounds, startDate, endDate } = {}) => {
+  if (!bounds) {
+    throw new Error('Bounds are required for EMIT plume search')
+  }
+
+  const search = async (withDates) => {
+    const params = new URLSearchParams({
+      bbox: bounds,
+      limit: String(EMIT_MAX_PLUMES)
+    })
+    if (withDates && startDate && endDate) {
+      params.set('datetime', `${startDate}T00:00:00Z/${endDate}T23:59:59Z`)
+    }
+    const response = await fetch(
+      `${EMIT_GHG_BASE}/api/stac/collections/${EMIT_COLLECTION}/items?${params}`
+    )
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || `EMIT search failed (${response.status})`)
+    }
+    return data.features || []
+  }
+
+  let items = await search(true)
+  let dateFallback = false
+  if (!items.length && startDate && endDate) {
+    items = await search(false)
+    dateFallback = items.length > 0
+  }
+
+  if (!items.length) {
+    return {
+      mode: 'emit-plume',
+      features: [],
+      tileUrls: [],
+      count: 0,
+      legend: {
+        title: 'EMIT plume enhancement',
+        unit: 'ppm-m',
+        min: 1,
+        max: 1500,
+        palette: EMIT_PLUME_PALETTE
+      },
+      attribution: 'NASA EMIT · US GHG Center',
+      note: 'No EMIT methane plumes found in this area for the selected dates.',
+      dateLabel: startDate && endDate ? `${startDate} to ${endDate}` : null
+    }
+  }
+
+  const tiles = await mapPool(items.slice(0, EMIT_MAX_PLUMES), 3, async (item) => {
+    try {
+      const tile = await fetchEmitTileJson(item.id)
+      return { item, tile }
+    } catch (err) {
+      return { item, error: err.message }
+    }
+  })
+
+  const ok = tiles.filter((row) => row.tile?.tileUrl)
+  const features = ok.map(({ item, tile }, index) => {
+    const center =
+      emitBboxCenter(item.bbox) ||
+      (tile.center
+        ? { lng: Number(tile.center[0]), lat: Number(tile.center[1]) }
+        : null)
+    if (!center) return null
+    const observed = item.properties?.datetime || null
+    return {
+      type: 'Feature',
+      id: item.id || `emit-${index}`,
+      geometry: {
+        type: 'Point',
+        coordinates: [center.lng, center.lat]
+      },
+      properties: {
+        source: 'emit',
+        mode: 'emit-plume',
+        methane_enhancement_ppm_m: null,
+        confidence: 'high',
+        observed_at: observed,
+        item_id: item.id,
+        bbox: item.bbox || null
+      }
+    }
+  }).filter(Boolean)
+
+  const tileUrls = ok.map(({ tile }) => tile.tileUrl).filter(Boolean)
+  const dates = ok
+    .map(({ item }) => item.properties?.datetime)
+    .filter(Boolean)
+    .map((d) => String(d).slice(0, 10))
+  const uniqueDates = [...new Set(dates)]
+
+  return {
+    mode: 'emit-plume',
+    features,
+    tileUrls,
+    count: features.length,
+    legend: {
+      title: 'EMIT plume enhancement',
+      unit: 'ppm-m',
+      min: 1,
+      max: 1500,
+      palette: EMIT_PLUME_PALETTE
+    },
+    attribution: 'NASA EMIT · US GHG Center',
+    note: dateFallback
+      ? `No EMIT plumes in the selected dates; showing ${features.length} plume(s) available in this area.`
+      : `${features.length} EMIT plume(s) · origin markers + spread tiles (ppm-m).`,
+    dateLabel: uniqueDates.length
+      ? uniqueDates.slice(0, 3).join(', ') + (uniqueDates.length > 3 ? '…' : '')
+      : startDate && endDate
+        ? `${startDate} to ${endDate}`
+        : null
+  }
 }
 

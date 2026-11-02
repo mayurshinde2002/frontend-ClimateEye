@@ -12,6 +12,7 @@ import TemperaturePanel from './TemperaturePanel'
 import RainFieldMap from './RainFieldMap'
 import AQIGridMap from './AQIGridMap'
 import SensorDataLayer from './SensorDataLayer'
+import CamsMethaneHeatLayer from './CamsMethaneHeatLayer'
 import LocationRadiusOverlay, { latLngBoundsForRadius } from './LocationRadiusOverlay'
 import './MapComponent.css'
 
@@ -608,41 +609,88 @@ const MapComponent = ({
           />
         )}
 
-        {methaneOverlay?.features?.map((feature) => {
-          const [lng, lat] = feature.geometry?.coordinates || []
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
-          const props = feature.properties || {}
-          const fill = colorForEnhancement(props.methane_enhancement_ppm_m, methaneOverlay.legend)
-          const confidence = props.confidence || 'medium'
-          return (
-            <CircleMarker
-              key={feature.id || `${lat}-${lng}`}
-              center={[lat, lng]}
-              radius={confidence === 'high' ? 9 : 7}
-              pathOptions={{
-                color: confidence === 'high' ? '#fb9b06' : '#c4b5fd',
-                fillColor: fill,
-                fillOpacity: 0.9,
-                weight: 2
-              }}
-            >
-              <Popup>
-                <div className="methane-popup">
-                  <strong>Methane plume</strong>
-                  <div>Enhancement: {Number(props.methane_enhancement_ppm_m || 0).toFixed(1)} ppm·m</div>
-                  <div>Confidence: {confidence}</div>
-                  {props.observed_at && <div>Observed: {props.observed_at.replace('T', ' ').replace('Z', ' UTC')}</div>}
-                  {props.wind_speed_m_s != null && (
-                    <div>Wind: {Number(props.wind_speed_m_s).toFixed(1)} m/s at {props.wind_direction_deg}°</div>
-                  )}
-                  {props.plume_len_max > 0 && (
-                    <div>Plume length: {Math.round(props.plume_len_max)} m</div>
-                  )}
-                </div>
-              </Popup>
-            </CircleMarker>
-          )
-        })}
+        {methaneOverlay?.tileUrls?.map((url) => (
+          <TileLayer
+            key={url}
+            attribution="NASA EMIT · US GHG Center"
+            url={url}
+            opacity={0.78}
+            zIndex={510}
+          />
+        ))}
+
+        {methaneOverlay?.mode === 'cams-hourly' && (
+          <CamsMethaneHeatLayer
+            methaneOverlay={methaneOverlay}
+            geometry={drawnGeometry || aqiGeometry}
+          />
+        )}
+
+        {methaneOverlay?.mode !== 'cams-hourly' &&
+          methaneOverlay?.features?.map((feature) => {
+            const [lng, lat] = feature.geometry?.coordinates || []
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+            const props = feature.properties || {}
+            const isEmit = props.source === 'emit'
+            const fill = colorForEnhancement(
+              props.methane_enhancement_ppm_m ?? (isEmit ? methaneOverlay.legend?.max : null),
+              methaneOverlay.legend
+            )
+            const confidence = props.confidence || 'medium'
+            return (
+              <CircleMarker
+                key={feature.id || `${lat}-${lng}`}
+                center={[lat, lng]}
+                radius={isEmit || confidence === 'high' ? 9 : 7}
+                pathOptions={{
+                  color: '#fb9b06',
+                  fillColor: isEmit ? '#1b0c41' : fill,
+                  fillOpacity: 0.9,
+                  weight: 2.5
+                }}
+              >
+                <Popup>
+                  <div className="methane-popup">
+                    <strong>
+                      {isEmit ? 'EMIT methane plume' : 'Methane plume'}
+                    </strong>
+                    {props.methane_enhancement_ppm_m != null && (
+                      <div>
+                        Enhancement:{' '}
+                        {Number(props.methane_enhancement_ppm_m).toFixed(1)} ppm·m
+                      </div>
+                    )}
+                    {isEmit && (
+                      <div>
+                        Origin marker · spread shown as EMIT enhancement tiles
+                      </div>
+                    )}
+                    <div>Confidence: {confidence}</div>
+                    {props.observed_at && (
+                      <div>
+                        Observed:{' '}
+                        {String(props.observed_at)
+                          .replace('T', ' ')
+                          .replace('Z', ' UTC')}
+                      </div>
+                    )}
+                    {props.wind_speed_m_s != null && (
+                      <div>
+                        Wind: {Number(props.wind_speed_m_s).toFixed(1)} m/s at{' '}
+                        {props.wind_direction_deg}°
+                      </div>
+                    )}
+                    {props.plume_len_max > 0 && (
+                      <div>Plume length: {Math.round(props.plume_len_max)} m</div>
+                    )}
+                    {isEmit && props.item_id && (
+                      <div>ID: {props.item_id}</div>
+                    )}
+                  </div>
+                </Popup>
+              </CircleMarker>
+            )
+          })}
       </MapContainer>
 
       {drawnGeometry && (
@@ -666,7 +714,11 @@ const MapComponent = ({
       {(methaneLoading || methaneOverlay) && (
         <div className="methane-legend">
           <div className="methane-legend-header">
-            <span>Methane analysis</span>
+            <span>
+              {methaneOverlay?.mode === 'cams-hourly'
+                ? 'Live / Hourly Methane (CAMS)'
+                : 'Plume Methane (origin + spread)'}
+            </span>
             {onClearMethane && (
               <button type="button" className="methane-legend-close" onClick={onClearMethane}>
                 Clear
@@ -674,7 +726,7 @@ const MapComponent = ({
             )}
           </div>
           {methaneLoading ? (
-            <p className="methane-legend-note">Loading plumes and tiles…</p>
+            <p className="methane-legend-note">Loading methane for selected area…</p>
           ) : (
             <>
               <div
@@ -685,13 +737,79 @@ const MapComponent = ({
               />
               <div className="methane-legend-scale">
                 <span>{methaneOverlay.legend?.min ?? 0}</span>
-                <span>{methaneOverlay.legend?.title || 'Methane'} ({methaneOverlay.legend?.unit || 'ppm-m'})</span>
+                <span>
+                  {methaneOverlay.legend?.title || 'Methane'} (
+                  {methaneOverlay.legend?.unit ||
+                    (methaneOverlay.mode === 'cams-hourly' ? 'μg/m³' : 'ppm-m')}
+                  )
+                </span>
                 <span>{methaneOverlay.legend?.max ?? 300}</span>
               </div>
               <p className="methane-legend-note">
-                {methaneOverlay.count ?? methaneOverlay.features?.length ?? 0} plumes
+                {methaneOverlay.mode === 'cams-hourly'
+                  ? `${methaneOverlay.count ?? methaneOverlay.features?.length ?? 0} CAMS sample(s)`
+                  : [
+                      methaneOverlay.archiveCount > 0
+                        ? `${methaneOverlay.archiveCount} archive plume(s)`
+                        : null,
+                      methaneOverlay.emitCount > 0
+                        ? `${methaneOverlay.emitCount} EMIT plume(s)`
+                        : null,
+                      methaneOverlay.tileUrl ? 'archive tiles' : null,
+                      methaneOverlay.tileUrls?.length
+                        ? `${methaneOverlay.tileUrls.length} EMIT tile layer(s)`
+                        : null
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') ||
+                    `${methaneOverlay.count ?? methaneOverlay.features?.length ?? 0} plume(s)`}
                 {methaneOverlay.dateLabel ? ` · ${methaneOverlay.dateLabel}` : ''}
               </p>
+              {methaneOverlay.mode === 'cams-hourly' && methaneOverlay.hourly?.length > 0 && (
+                <div className="methane-hourly-spark">
+                  {(() => {
+                    const series = methaneOverlay.hourly
+                      .filter((row) => row.methane != null)
+                      .slice(-24)
+                    if (series.length < 2) return null
+                    const vals = series.map((row) => row.methane)
+                    const lo = Math.min(...vals)
+                    const hi = Math.max(...vals)
+                    const span = hi - lo || 1
+                    const w = 220
+                    const h = 36
+                    const points = series
+                      .map((row, i) => {
+                        const x = (i / (series.length - 1)) * w
+                        const y = h - ((row.methane - lo) / span) * (h - 4) - 2
+                        return `${x.toFixed(1)},${y.toFixed(1)}`
+                      })
+                      .join(' ')
+                    return (
+                      <>
+                        <svg
+                          className="methane-hourly-spark-svg"
+                          viewBox={`0 0 ${w} ${h}`}
+                          width="100%"
+                          height={h}
+                          aria-hidden="true"
+                        >
+                          <polyline
+                            fill="none"
+                            stroke="#fb9b06"
+                            strokeWidth="2"
+                            points={points}
+                          />
+                        </svg>
+                        <p className="methane-legend-note">Last 24 hourly values (μg/m³)</p>
+                      </>
+                    )
+                  })()}
+                </div>
+              )}
+              {methaneOverlay.attribution && (
+                <p className="methane-legend-note">{methaneOverlay.attribution}</p>
+              )}
               {methaneOverlay.note && <p className="methane-legend-note">{methaneOverlay.note}</p>}
             </>
           )}

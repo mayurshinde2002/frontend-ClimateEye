@@ -9,9 +9,10 @@ import PlaceSearch from './PlaceSearch'
 import AreaPollutantsPanel from './AreaPollutantsPanel'
 import WeatherSection from './WeatherSection'
 import AQISection from './AQISection'
+import AqiWorkspace from './AqiWorkspace'
 import WeatherWorkspace from './WeatherWorkspace'
 import LiveDashboardCards from './LiveDashboardCards'
-import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData, fetchMethaneCatalog, fetchMethanePlumes, fetchMethaneTiles, boundsFromGeometry, resolveMethaneDateRange } from '../services/api'
+import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData, fetchMethaneCatalog, fetchMethanePlumes, fetchMethaneTiles, fetchOpenMeteoMethaneForGeometry, fetchEmitMethanePlumes, boundsFromGeometry, resolveMethaneDateRange } from '../services/api'
 import { resolveCityFromCoords } from '../services/aqiInApi'
 import './Dashboard.css'
 import './DatePicker.css'
@@ -32,6 +33,8 @@ const Dashboard = () => {
   const [basemapMenuOpen, setBasemapMenuOpen] = useState(false)
   const [layersMenuOpen, setLayersMenuOpen] = useState(false)
   const layersMenuRef = useRef(null)
+  const layersFloatRef = useRef(null)
+  const basemapFloatRef = useRef(null)
   const [showWind, setShowWind] = useState(false)
   const [showTemperature, setShowTemperature] = useState(false)
   const [showRain, setShowRain] = useState(false)
@@ -55,6 +58,7 @@ const Dashboard = () => {
   const [selectedHeight, setSelectedHeight] = useState(null) // '0-3meter' or '3meter-above' or null
   const [methaneOverlay, setMethaneOverlay] = useState(null)
   const [methaneLoading, setMethaneLoading] = useState(false)
+  const [methaneLoadingMode, setMethaneLoadingMode] = useState(null)
   const [methaneError, setMethaneError] = useState(null)
   const [show3DView, setShow3DView] = useState(false)
   const [mapView, setMapView] = useState(null)
@@ -65,6 +69,8 @@ const Dashboard = () => {
   const [calendarResolving, setCalendarResolving] = useState(false)
   /** Top-level product section: AQI tools vs Weather workspace (built in parallel). */
   const [productSection, setProductSection] = useState('aqi')
+  /** AQI stats dashboard → full previous map tools (draw, layers, analysis). */
+  const [aqiMapFullscreen, setAqiMapFullscreen] = useState(false)
   
   // Refs to prevent multiple simultaneous API calls
   const isFetchingRef = useRef(false)
@@ -188,18 +194,26 @@ const Dashboard = () => {
     navigate('/login')
   }
 
+  const resetMapLayersOff = () => {
+    setShowTemperature(false)
+    setShowRain(false)
+    setShowWind(false)
+    setShowAqi(false)
+    setShowSensorData(false)
+  }
+
   const handleDrawArea = () => {
     setShow3DView(false)
     setIsDrawing(true)
     setUploadedKML(null) // Clear KML when drawing
+    resetMapLayersOff()
   }
 
   const handleGeometryComplete = (geometry) => {
     setDrawnGeometry(geometry)
     setIsDrawing(false)
-    setShowTemperature(false)
-    setShowRain(false)
-    setShowAqi(true)
+    // All layer toggles start off after drawing; user turns them on from Layers
+    resetMapLayersOff()
   }
 
   const handleCancelDrawing = () => {
@@ -223,9 +237,7 @@ const Dashboard = () => {
       })
       setDrawnGeometry(null) // Clear drawn geometry when KML is uploaded
       setIsDrawing(false)
-      setShowTemperature(false)
-      setShowRain(false)
-      setShowAqi(true)
+      resetMapLayersOff()
     }
     reader.readAsText(file)
     e.target.value = '' // Reset file input
@@ -238,28 +250,35 @@ const Dashboard = () => {
     setMethaneOverlay(null)
     setMethaneError(null)
     setShow3DView(false)
-    setShowAqi(false)
+    resetMapLayersOff()
   }
 
   const handleClearMethane = () => {
     setMethaneOverlay(null)
     setMethaneError(null)
+    setMethaneLoadingMode(null)
   }
 
-  const handleAnalyseMethane = async () => {
+  const resolveSelectedGeometry = () => {
+    let geometry = drawnGeometry
+    if (!geometry && uploadedKML) {
+      geometry = parseKMLToGeometry(uploadedKML.content)
+    }
+    return geometry
+  }
+
+  const handlePlumeMethane = async () => {
     if (!drawnGeometry && !uploadedKML) {
       alert('Please draw an area or upload a KML file first')
       return
     }
 
     setMethaneLoading(true)
+    setMethaneLoadingMode('plume')
     setMethaneError(null)
 
     try {
-      let geometry = drawnGeometry
-      if (!geometry && uploadedKML) {
-        geometry = parseKMLToGeometry(uploadedKML.content)
-      }
+      const geometry = resolveSelectedGeometry()
       if (!geometry) {
         throw new Error('Could not parse geometry')
       }
@@ -279,27 +298,146 @@ const Dashboard = () => {
         endDate: dates.endDate
       }
 
-      const [catalog, plumes, tiles] = await Promise.all([
-        fetchMethaneCatalog(),
-        fetchMethanePlumes(query),
-        fetchMethaneTiles(query)
+      // Archive plumes/tiles + public EMIT plumes (origin + spread)
+      const [archiveSettled, emitSettled] = await Promise.allSettled([
+        Promise.all([
+          fetchMethaneCatalog(),
+          fetchMethanePlumes(query),
+          fetchMethaneTiles(query)
+        ]),
+        bounds
+          ? fetchEmitMethanePlumes({
+              bounds,
+              startDate: dates.startDate,
+              endDate: dates.endDate
+            })
+          : Promise.resolve(null)
       ])
 
+      const archive =
+        archiveSettled.status === 'fulfilled' ? archiveSettled.value : null
+      const [catalog, plumes, tiles] = archive || [null, null, null]
+      const emit =
+        emitSettled.status === 'fulfilled' ? emitSettled.value : null
+
+      const archiveFeatures = plumes?.geojson?.features || []
+      const emitFeatures = emit?.features || []
+      const tileUrl = tiles?.tile_url || null
+      const tileUrls = emit?.tileUrls || []
+
+      if (
+        !archiveFeatures.length &&
+        !emitFeatures.length &&
+        !tileUrl &&
+        !tileUrls.length
+      ) {
+        const archiveErr =
+          archiveSettled.status === 'rejected'
+            ? archiveSettled.reason?.message
+            : null
+        const emitErr =
+          emitSettled.status === 'rejected' ? emitSettled.reason?.message : null
+        throw new Error(
+          archiveErr ||
+            emitErr ||
+            emit?.note ||
+            'No methane plumes found in this area for the selected dates'
+        )
+      }
+
+      const notes = [dates.note, emit?.note].filter(Boolean)
+      if (archiveSettled.status === 'rejected') {
+        notes.push(
+          `Archive unavailable: ${archiveSettled.reason?.message || 'failed'}`
+        )
+      }
+      if (emitSettled.status === 'rejected') {
+        notes.push(`EMIT unavailable: ${emitSettled.reason?.message || 'failed'}`)
+      }
+
+      const attributionParts = [
+        tiles?.attribution || plumes?.attribution || catalog?.attribution,
+        emit?.attribution
+      ].filter(Boolean)
+
+      const dateParts = [
+        `${dates.startDate} to ${dates.endDate}`,
+        emit?.dateLabel && emit.dateLabel !== `${dates.startDate} to ${dates.endDate}`
+          ? `EMIT ${emit.dateLabel}`
+          : null
+      ].filter(Boolean)
+
       setMethaneOverlay({
-        tileUrl: tiles.tile_url || null,
-        features: plumes.geojson?.features || [],
-        legend: tiles.legend || catalog.legend || null,
-        attribution: tiles.attribution || plumes.attribution || catalog.attribution,
-        count: plumes.count ?? tiles.count ?? 0,
-        dateLabel: `${dates.startDate} to ${dates.endDate}`,
-        note: dates.note
+        mode: 'plume',
+        tileUrl,
+        tileUrls,
+        features: [...archiveFeatures, ...emitFeatures],
+        legend:
+          tiles?.legend ||
+          catalog?.legend ||
+          emit?.legend || {
+            title: 'Plume enhancement',
+            unit: 'ppm-m',
+            min: 0,
+            max: 1500,
+            palette: ['#1b0c41', '#781c6d', '#ed6925', '#fcffa4']
+          },
+        attribution: attributionParts.join(' · ') || null,
+        count: archiveFeatures.length + emitFeatures.length,
+        archiveCount: archiveFeatures.length,
+        emitCount: emitFeatures.length,
+        dateLabel: dateParts.join(' · '),
+        note: notes.join(' ') || null
       })
     } catch (err) {
       setMethaneOverlay(null)
       setMethaneError(err.message)
-      alert(`Methane analysis failed: ${err.message}`)
+      alert(`Plume methane failed: ${err.message}`)
     } finally {
       setMethaneLoading(false)
+      setMethaneLoadingMode(null)
+    }
+  }
+
+  const handleLiveMethane = async () => {
+    if (!drawnGeometry && !uploadedKML) {
+      alert('Please draw an area or upload a KML file first')
+      return
+    }
+
+    setMethaneLoading(true)
+    setMethaneLoadingMode('cams-hourly')
+    setMethaneError(null)
+
+    try {
+      const geometry = resolveSelectedGeometry()
+      if (!geometry) {
+        throw new Error('Could not parse geometry')
+      }
+
+      const methane = await fetchOpenMeteoMethaneForGeometry(geometry)
+      if (!methane.features?.length) {
+        throw new Error('No live methane values returned for this area')
+      }
+
+      setMethaneOverlay({
+        mode: 'cams-hourly',
+        tileUrl: null,
+        features: methane.features,
+        legend: methane.legend,
+        attribution: methane.attribution,
+        count: methane.count,
+        dateLabel: methane.dateLabel,
+        note: methane.note,
+        hourly: methane.hourly || []
+      })
+    } catch (err) {
+      setMethaneOverlay(null)
+      setMethaneError(err.message)
+      alert(`Live methane failed: ${err.message}`)
+    } finally {
+      setMethaneLoading(false)
+      setMethaneLoadingMode(null)
     }
   }
 
@@ -353,14 +491,27 @@ const Dashboard = () => {
   ].filter(Boolean).length
 
   useEffect(() => {
-    if (!layersMenuOpen) return undefined
+    if (!layersMenuOpen && !basemapMenuOpen) return undefined
     const onPointerDown = (event) => {
-      if (layersMenuRef.current && !layersMenuRef.current.contains(event.target)) {
+      const target = event.target
+      const inLayersTrigger = layersMenuRef.current?.contains(target)
+      const inLayersFloat = layersFloatRef.current?.contains(target)
+      const inBasemapFloat = basemapFloatRef.current?.contains(target)
+      // Header basemap picker (when not using map float)
+      const inBasemapPicker = target.closest?.('.basemap-picker')
+
+      if (layersMenuOpen && !inLayersTrigger && !inLayersFloat) {
         setLayersMenuOpen(false)
+      }
+      if (basemapMenuOpen && !inBasemapFloat && !inBasemapPicker) {
+        setBasemapMenuOpen(false)
       }
     }
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') setLayersMenuOpen(false)
+      if (event.key === 'Escape') {
+        setLayersMenuOpen(false)
+        setBasemapMenuOpen(false)
+      }
     }
     document.addEventListener('mousedown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
@@ -368,7 +519,7 @@ const Dashboard = () => {
       document.removeEventListener('mousedown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
     }
-  }, [layersMenuOpen])
+  }, [layersMenuOpen, basemapMenuOpen])
 
   const getMaxDate = () => {
     return format(today, 'yyyy-MM-dd')
@@ -1490,7 +1641,10 @@ const Dashboard = () => {
           <button
             type="button"
             className={`product-section-tab${productSection === 'aqi' ? ' is-active' : ''}`}
-            onClick={() => setProductSection('aqi')}
+            onClick={() => {
+              setProductSection('aqi')
+              setAqiMapFullscreen(false)
+            }}
             aria-pressed={productSection === 'aqi'}
           >
             AQI
@@ -1498,7 +1652,10 @@ const Dashboard = () => {
           <button
             type="button"
             className={`product-section-tab${productSection === 'weather' ? ' is-active' : ''}`}
-            onClick={() => setProductSection('weather')}
+            onClick={() => {
+              setProductSection('weather')
+              setAqiMapFullscreen(false)
+            }}
             aria-pressed={productSection === 'weather'}
           >
             Weather
@@ -1521,8 +1678,305 @@ const Dashboard = () => {
         <div className="dashboard-content dashboard-content--map-full dashboard-content--weather">
           <WeatherWorkspace />
         </div>
+      ) : productSection === 'aqi' && !aqiMapFullscreen ? (
+        <div className="dashboard-content dashboard-content--map-full dashboard-content--aqi">
+          <AqiWorkspace onExpandMap={() => setAqiMapFullscreen(true)} />
+        </div>
       ) : (
-      <div className={`dashboard-content${!showAnalysis ? ' dashboard-content--map-full' : ''}`}>
+      <div className={`dashboard-content${!showAnalysis ? ' dashboard-content--map-full' : ''}${aqiMapFullscreen ? ' dashboard-content--aqi-map-full' : ''}`}>
+        {aqiMapFullscreen && (
+          <div className="aqi-map-full-bar">
+            <button
+              type="button"
+              className="aqi-map-full-back"
+              onClick={() => setAqiMapFullscreen(false)}
+            >
+              ← Back to AQI dashboard
+            </button>
+            <div className="aqi-map-full-tools">
+              <div className="map-top-bar map-top-bar--in-header">
+                <div className="map-top-bar-group map-top-bar-tools">
+                  <button
+                    className="view-toggle-button"
+                    onClick={handleDrawArea}
+                    disabled={isDrawing}
+                    type="button"
+                    title="Draw area"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                      <path d="M2 17l10 5 10-5"></path>
+                      <path d="M2 12l10 5 10-5"></path>
+                    </svg>
+                    <span className="view-toggle-label">Draw Area</span>
+                  </button>
+
+                  <label className="view-toggle-button map-top-upload" title="Upload KML">
+                    <input
+                      type="file"
+                      accept=".kml,.kmz"
+                      onChange={handleKMLUpload}
+                      style={{ display: 'none' }}
+                    />
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="17 8 12 3 7 8"></polyline>
+                      <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <span className="view-toggle-label">Upload KML</span>
+                  </label>
+
+                  <button
+                    type="button"
+                    className={`view-toggle-button locate-action-button${locateState.active ? ' active' : ''}${locateState.locating ? ' locating' : ''}`}
+                    onClick={() => setLocateRequest((n) => n + 1)}
+                    disabled={locateState.locating}
+                    title={locateState.active ? 'Hide my location' : 'Show my location'}
+                    aria-pressed={locateState.active}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <circle cx="12" cy="12" r="3"></circle>
+                      <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
+                    </svg>
+                    <span className="view-toggle-label">Locate me</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`view-toggle-button${calendarResolving ? ' active' : ''}${selectedGeometry ? '' : ' is-disabled'}`}
+                    onClick={handleOpenAqiCalendar}
+                    disabled={!selectedGeometry || calendarResolving}
+                    title={
+                      selectedGeometry
+                        ? 'Open month-wise AQI for the city nearest your drawn area'
+                        : 'Draw an area (or upload a KML) to enable AQI Calendar'
+                    }
+                    aria-disabled={!selectedGeometry || calendarResolving}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+                      <path d="M16 2v4M8 2v4M3 10h18"></path>
+                    </svg>
+                    <span className="view-toggle-label">
+                      {calendarResolving ? 'Resolving…' : 'AQI Calendar'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="map-top-bar-search">
+                  <PlaceSearch
+                    map={leafletMap}
+                    selectedPlace={searchedPlace}
+                    onSelect={setSearchedPlace}
+                    onClear={() => setSearchedPlace(null)}
+                  />
+                </div>
+
+                <div className="map-top-bar-group map-top-bar-actions">
+                  <button
+                    className={`view-toggle-button ${loading ? 'active' : ''}`}
+                    onClick={handleAnalyse}
+                    disabled={loading}
+                    type="button"
+                  >
+                    <span>{loading ? 'Loading…' : 'Analyse'}</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${methaneOverlay?.mode === 'plume' ? 'active' : ''}`}
+                    onClick={handlePlumeMethane}
+                    disabled={methaneLoading || loading}
+                    type="button"
+                    title="Plume origin + spread (archive tiles/plumes + NASA EMIT)"
+                  >
+                    <span className="label-full">{methaneLoadingMode === 'plume' ? 'Loading…' : 'Plume Methane'}</span>
+                    <span className="label-short">{methaneLoadingMode === 'plume' ? '…' : 'Plume'}</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${methaneOverlay?.mode === 'cams-hourly' ? 'active' : ''}`}
+                    onClick={handleLiveMethane}
+                    disabled={methaneLoading || loading}
+                    type="button"
+                    title="Live hourly CAMS methane (Open-Meteo) — ambient field, not plumes"
+                  >
+                    <span className="label-full">{methaneLoadingMode === 'cams-hourly' ? 'Loading…' : 'Live Methane'}</span>
+                    <span className="label-short">{methaneLoadingMode === 'cams-hourly' ? '…' : 'Live CH₄'}</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${show3DView ? 'active' : ''}`}
+                    onClick={handleOpen3DView}
+                    disabled={!selectedGeometry && !mapView}
+                    title={selectedGeometry ? 'Show 3D buildings for the drawn area' : 'Show this map area in 3D'}
+                    type="button"
+                  >
+                    <span>3D View</span>
+                  </button>
+                </div>
+
+                <div className="map-top-bar-group map-top-bar-menus">
+                  <div
+                    className={`layers-menu${layersMenuOpen ? ' is-open' : ''}`}
+                    ref={layersMenuRef}
+                  >
+                    <button
+                      type="button"
+                      className={`view-toggle-button layers-menu-trigger${layersMenuOpen || activeLayerCount > 0 ? ' active' : ''}`}
+                      onClick={() => {
+                        setLayersMenuOpen((open) => !open)
+                        setBasemapMenuOpen(false)
+                      }}
+                      title={layersMenuOpen ? 'Close layers' : 'Map layers'}
+                      aria-expanded={layersMenuOpen}
+                      aria-haspopup="true"
+                    >
+                      <span className="layers-menu-icon" aria-hidden="true">
+                        <span />
+                        <span />
+                        <span />
+                      </span>
+                      <span className="view-toggle-label">Layers</span>
+                      {activeLayerCount > 0 && (
+                        <span className="layers-menu-badge">{activeLayerCount}</span>
+                      )}
+                    </button>
+
+                    <div
+                      className="layers-menu-panel"
+                      role="menu"
+                      aria-hidden={!layersMenuOpen}
+                    >
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showTemperature ? 'active' : ''}`}
+                        onClick={toggleTemperature}
+                        title={showTemperature ? 'Hide temperature' : 'Show temperature on the map'}
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showTemperature}
+                        style={{ '--item-index': 0 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
+                        </svg>
+                        <span className="view-toggle-label">Temp</span>
+                      </button>
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showRain ? 'active' : ''}`}
+                        onClick={toggleRain}
+                        title={showRain ? 'Hide rain' : 'Show rain on the map'}
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showRain}
+                        style={{ '--item-index': 1 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M16 13V21M8 13V21M12 15V23"></path>
+                          <path d="M20 10.5a5.5 5.5 0 0 0-10.2-2.8A4.5 4.5 0 1 0 6.5 16H19a3.5 3.5 0 0 0 1-5.5z"></path>
+                        </svg>
+                        <span className="view-toggle-label">Rain</span>
+                      </button>
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showWind ? 'active' : ''}`}
+                        onClick={toggleWind}
+                        title={showWind ? 'Hide wind' : 'Show wind on the map'}
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showWind}
+                        style={{ '--item-index': 2 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M3 8h11a3 3 0 1 0-3-3"></path>
+                          <path d="M3 12h15a3 3 0 1 1-3 3"></path>
+                          <path d="M3 16h8"></path>
+                        </svg>
+                        <span className="view-toggle-label">Wind</span>
+                      </button>
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showAqi ? 'active' : ''}`}
+                        onClick={toggleAqi}
+                        title={
+                          showAqi
+                            ? 'Hide AQI grid'
+                            : 'Show AQI grid for the drawn area (~50–100 m cells)'
+                        }
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showAqi}
+                        style={{ '--item-index': 3 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M12 2v4"></path>
+                          <path d="M12 18v4"></path>
+                          <path d="M4.93 4.93l2.83 2.83"></path>
+                          <path d="M16.24 16.24l2.83 2.83"></path>
+                          <path d="M2 12h4"></path>
+                          <path d="M18 12h4"></path>
+                          <path d="M4.93 19.07l2.83-2.83"></path>
+                          <path d="M16.24 7.76l2.83-2.83"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                        <span className="view-toggle-label">AQI</span>
+                      </button>
+                      <button
+                        className={`view-toggle-button layers-menu-item ${showSensorData ? 'active' : ''}`}
+                        onClick={toggleSensorData}
+                        title={
+                          showSensorData
+                            ? 'Hide nearby aqi.in sensors'
+                            : 'Show nearby aqi.in sensor data for the current map location'
+                        }
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={showSensorData}
+                        style={{ '--item-index': 4 }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M12 3v3"></path>
+                          <path d="M12 18v3"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                          <path d="M5 8h3M16 8h3M5 16h3M16 16h3"></path>
+                        </svg>
+                        <span className="view-toggle-label">Sensor</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="basemap-picker">
+                    <button
+                      className={`view-toggle-button ${basemapMenuOpen ? 'active' : ''}`}
+                      onClick={() => {
+                        setBasemapMenuOpen((open) => !open)
+                        setLayersMenuOpen(false)
+                      }}
+                      title="Choose basemap"
+                      type="button"
+                      aria-expanded={basemapMenuOpen}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                        <circle cx="12" cy="10" r="3"></circle>
+                      </svg>
+                      <span className="view-toggle-label">{BASEMAPS[viewType]?.label || 'Map'}</span>
+                    </button>
+                    {basemapMenuOpen && (
+                      <div className="basemap-menu" role="menu">
+                        {Object.values(BASEMAPS).map((basemap) => (
+                          <button
+                            key={basemap.id}
+                            className={`view-toggle-button basemap-menu-item ${viewType === basemap.id ? 'active' : ''}`}
+                            onClick={() => selectBasemap(basemap.id)}
+                            type="button"
+                            role="menuitem"
+                          >
+                            <span>{basemap.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         <main className="main-content">
           {!showAnalysis && show3DView && (selectedGeometry || mapView) ? (
             <Suspense fallback={<div className="building-3d-loading">Loading 3D view…</div>}>
@@ -1535,6 +1989,7 @@ const Dashboard = () => {
             </Suspense>
           ) : !showAnalysis ? (
             <div className="map-wrapper">
+              {!aqiMapFullscreen && (
               <div className="map-top-bar">
                 <div className="map-top-bar-group map-top-bar-tools">
                   <button
@@ -1623,13 +2078,24 @@ const Dashboard = () => {
                     <span>{loading ? 'Loading…' : 'Analyse'}</span>
                   </button>
                   <button
-                    className={`view-toggle-button ${methaneOverlay ? 'active' : ''}`}
-                    onClick={handleAnalyseMethane}
+                    className={`view-toggle-button ${methaneOverlay?.mode === 'plume' ? 'active' : ''}`}
+                    onClick={handlePlumeMethane}
                     disabled={methaneLoading || loading}
                     type="button"
+                    title="Plume origin + spread (archive tiles/plumes + NASA EMIT)"
                   >
-                    <span className="label-full">{methaneLoading ? 'Loading…' : 'Analysis Methane'}</span>
-                    <span className="label-short">{methaneLoading ? '…' : 'Methane'}</span>
+                    <span className="label-full">{methaneLoadingMode === 'plume' ? 'Loading…' : 'Plume Methane'}</span>
+                    <span className="label-short">{methaneLoadingMode === 'plume' ? '…' : 'Plume'}</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${methaneOverlay?.mode === 'cams-hourly' ? 'active' : ''}`}
+                    onClick={handleLiveMethane}
+                    disabled={methaneLoading || loading}
+                    type="button"
+                    title="Live hourly CAMS methane (Open-Meteo) — ambient field, not plumes"
+                  >
+                    <span className="label-full">{methaneLoadingMode === 'cams-hourly' ? 'Loading…' : 'Live Methane'}</span>
+                    <span className="label-short">{methaneLoadingMode === 'cams-hourly' ? '…' : 'Live CH₄'}</span>
                   </button>
                   <button
                     className={`view-toggle-button ${show3DView ? 'active' : ''}`}
@@ -1805,8 +2271,116 @@ const Dashboard = () => {
                 </div>
               </div>
 
+              )}
               {locateState.error && (
                 <div className="locate-toolbar-error locate-toolbar-error--bar">{locateState.error}</div>
+              )}
+
+              {aqiMapFullscreen && layersMenuOpen && (
+                <div
+                  className="map-layers-float"
+                  role="menu"
+                  aria-label="Map layers"
+                  ref={layersFloatRef}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    className={`view-toggle-button layers-menu-item ${showTemperature ? 'active' : ''}`}
+                    onClick={toggleTemperature}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={showTemperature}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
+                    </svg>
+                    <span className="view-toggle-label">Temp</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button layers-menu-item ${showRain ? 'active' : ''}`}
+                    onClick={toggleRain}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={showRain}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M16 13V21M8 13V21M12 15V23"></path>
+                      <path d="M20 10.5a5.5 5.5 0 0 0-10.2-2.8A4.5 4.5 0 1 0 6.5 16H19a3.5 3.5 0 0 0 1-5.5z"></path>
+                    </svg>
+                    <span className="view-toggle-label">Rain</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button layers-menu-item ${showWind ? 'active' : ''}`}
+                    onClick={toggleWind}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={showWind}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M3 8h11a3 3 0 1 0-3-3"></path>
+                      <path d="M3 12h15a3 3 0 1 1-3 3"></path>
+                      <path d="M3 16h8"></path>
+                    </svg>
+                    <span className="view-toggle-label">Wind</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button layers-menu-item ${showAqi ? 'active' : ''}`}
+                    onClick={toggleAqi}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={showAqi}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 2v4"></path>
+                      <path d="M12 18v4"></path>
+                      <path d="M4.93 4.93l2.83 2.83"></path>
+                      <path d="M16.24 16.24l2.83 2.83"></path>
+                      <path d="M2 12h4"></path>
+                      <path d="M18 12h4"></path>
+                      <path d="M4.93 19.07l2.83-2.83"></path>
+                      <path d="M16.24 7.76l2.83-2.83"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    <span className="view-toggle-label">AQI</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button layers-menu-item ${showSensorData ? 'active' : ''}`}
+                    onClick={toggleSensorData}
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={showSensorData}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 3v3"></path>
+                      <path d="M12 18v3"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                      <path d="M5 8h3M16 8h3M5 16h3M16 16h3"></path>
+                    </svg>
+                    <span className="view-toggle-label">Sensor</span>
+                  </button>
+                </div>
+              )}
+
+              {aqiMapFullscreen && basemapMenuOpen && (
+                <div
+                  className="map-basemap-float"
+                  role="menu"
+                  aria-label="Basemap"
+                  ref={basemapFloatRef}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  {Object.values(BASEMAPS).map((basemap) => (
+                    <button
+                      key={basemap.id}
+                      className={`view-toggle-button basemap-menu-item ${viewType === basemap.id ? 'active' : ''}`}
+                      onClick={() => selectBasemap(basemap.id)}
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span>{basemap.label}</span>
+                    </button>
+                  ))}
+                </div>
               )}
 
               {selectedGeometry && (

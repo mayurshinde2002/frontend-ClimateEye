@@ -5,15 +5,10 @@ import WeatherMiniMap from './WeatherMiniMap'
 import WeatherConditionStrip from './WeatherConditionStrip'
 import { fetchWeatherData, fetchHourlyWeatherData, fetchAQIData } from '../services/api'
 import { resolveCityFromCoords } from '../services/aqiInApi'
+import { MUMBAI_PLACE, resolveStartupPlace } from '../services/startupPlace'
 import './WeatherWorkspace.css'
 
-const DEFAULT_PLACE = {
-  city: 'Mumbai',
-  state: 'Maharashtra',
-  country: 'India',
-  latitude: 19.076,
-  longitude: 72.8777
-}
+const DEFAULT_PLACE = MUMBAI_PLACE
 
 const pickNumber = (...vals) => {
   for (const v of vals) {
@@ -292,8 +287,25 @@ const WeatherWorkspace = () => {
   }, [])
 
   useEffect(() => {
-    loadWeather(place)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps — initial Mumbai load
+    let cancelled = false
+    setLocating(true)
+    resolveStartupPlace()
+      .then(async ({ place: startup }) => {
+        if (cancelled) return
+        setSearchedPlace(null)
+        setPlace(startup)
+        await loadWeather(startup)
+      })
+      .catch(async () => {
+        if (cancelled) return
+        setPlace(DEFAULT_PLACE)
+        await loadWeather(DEFAULT_PLACE)
+      })
+      .finally(() => {
+        if (!cancelled) setLocating(false)
+      })
+    return () => { cancelled = true }
+  }, [loadWeather])
 
   const handlePlaceSearch = useCallback(async (picked) => {
     if (!picked || !Number.isFinite(picked.lat) || !Number.isFinite(picked.lng)) return

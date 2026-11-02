@@ -12,6 +12,19 @@ export default defineConfig({
         changeOrigin: true,
         secure: true
       },
+      '/ghgcenter': {
+        target: 'https://earth.gov',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/ghgcenter/, '/ghgcenter')
+      },
+      // Register before '/open-meteo' so this path is not swallowed by that prefix.
+      '/air-quality-api': {
+        target: 'https://air-quality-api.open-meteo.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/air-quality-api/, '')
+      },
       '/open-meteo': {
         target: 'https://api.open-meteo.com',
         changeOrigin: true,
