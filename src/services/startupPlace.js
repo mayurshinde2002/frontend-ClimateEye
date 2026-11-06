@@ -1,4 +1,5 @@
 import { resolveCityFromCoords } from './aqiInApi'
+import { reverseGeocode } from './geocoding'
 
 /** Default fallback when geolocation is unavailable or denied. */
 export const MUMBAI_PLACE = {
@@ -7,25 +8,6 @@ export const MUMBAI_PLACE = {
   country: 'India',
   latitude: 19.076,
   longitude: 72.8777
-}
-
-const reverseGeocode = async (latitude, longitude) => {
-  try {
-    const url =
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2` +
-      `&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`
-    const res = await fetch(url, { headers: { Accept: 'application/json' } })
-    if (!res.ok) return null
-    const data = await res.json()
-    const a = data.address || {}
-    return {
-      city: a.city || a.town || a.village || a.suburb || a.county || 'Your area',
-      state: a.state || a.region || '',
-      country: a.country || 'India'
-    }
-  } catch {
-    return null
-  }
 }
 
 const readGeolocation = () =>
@@ -55,15 +37,16 @@ export const resolveStartupPlace = async () => {
     }
 
     const [geo, city] = await Promise.all([
-      reverseGeocode(latitude, longitude),
+      reverseGeocode(latitude, longitude).catch(() => null),
       resolveCityFromCoords(latitude, longitude).catch(() => null)
     ])
+    const a = geo?.address || {}
 
     return {
       place: {
-        city: geo?.city || city?.cityName || city?.title || 'Your location',
-        state: geo?.state || '',
-        country: geo?.country || 'India',
+        city: a.city || a.town || a.village || a.suburb || a.county || city?.cityName || city?.title || 'Your location',
+        state: a.state || a.region || '',
+        country: a.country || 'India',
         latitude,
         longitude
       },

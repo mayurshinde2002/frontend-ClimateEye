@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { CircleMarker, Popup, useMap } from 'react-leaflet'
+import { useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { pointInGeometry } from '../utils/polygonIndex'
 
@@ -246,8 +246,7 @@ const CamsHeatCanvas = ({ geometry, field, legend }) => {
 }
 
 /**
- * Fills the drawn AOI with a continuous CAMS methane field (area coverage),
- * plus sample markers at fetch points.
+ * Fills the drawn AOI with a continuous CAMS methane gradient only (no sample markers).
  */
 const CamsMethaneHeatLayer = ({ methaneOverlay, geometry }) => {
   const field = useMemo(() => {
@@ -274,45 +273,11 @@ const CamsMethaneHeatLayer = ({ methaneOverlay, geometry }) => {
   if (!geometry || !field.length) return null
 
   return (
-    <>
-      <CamsHeatCanvas
-        geometry={geometry}
-        field={field}
-        legend={methaneOverlay?.legend}
-      />
-      {field.map((point) => (
-        <CircleMarker
-          key={point.id}
-          center={[point.lat, point.lng]}
-          radius={7}
-          pathOptions={{
-            color: '#fb9b06',
-            weight: 2.5,
-            fillColor: '#1b0c41',
-            fillOpacity: 0.9
-          }}
-        >
-          <Popup>
-            <div className="methane-popup">
-              <strong>Live methane (CAMS)</strong>
-              <div>
-                Concentration: {point.value.toFixed(1)} {point.unit}
-              </div>
-              <div>
-                Sample: {point.lat.toFixed(3)}, {point.lng.toFixed(3)}
-              </div>
-              {point.elevation_m != null && (
-                <div>Elevation: {Math.round(point.elevation_m)} m</div>
-              )}
-              {point.observed_at && (
-                <div>Time: {String(point.observed_at).replace('T', ' ')}</div>
-              )}
-              <div>Source: Open-Meteo / CAMS (hourly)</div>
-            </div>
-          </Popup>
-        </CircleMarker>
-      ))}
-    </>
+    <CamsHeatCanvas
+      geometry={geometry}
+      field={field}
+      legend={methaneOverlay?.legend}
+    />
   )
 }
 

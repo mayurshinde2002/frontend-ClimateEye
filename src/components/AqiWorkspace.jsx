@@ -25,6 +25,7 @@ import {
 } from '../services/aqiInApi'
 
 const HISTORY_RANGE_ORDER = ['24h', '7d', '30d']
+import { reverseGeocodePlace } from '../services/geocoding'
 import { MUMBAI_PLACE, resolveStartupPlace } from '../services/startupPlace'
 import './AqiWorkspace.css'
 
@@ -246,23 +247,6 @@ const matchCityRank = (items, cityName) => {
   }) || null
 }
 
-const reverseGeocode = async (latitude, longitude) => {
-  try {
-    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`
-    const res = await fetch(url, { headers: { Accept: 'application/json' } })
-    if (!res.ok) return null
-    const data = await res.json()
-    const a = data.address || {}
-    return {
-      city: a.city || a.town || a.village || a.suburb || a.county || 'Your area',
-      state: a.state || a.region || '',
-      country: a.country || ''
-    }
-  } catch {
-    return null
-  }
-}
-
 const AqiWorkspace = ({ onExpandMap }) => {
   const [place, setPlace] = useState(DEFAULT_PLACE)
   const [searchedPlace, setSearchedPlace] = useState(null)
@@ -409,7 +393,7 @@ const AqiWorkspace = ({ onExpandMap }) => {
         const longitude = pos.coords.longitude
         try {
           const [geo, city] = await Promise.all([
-            reverseGeocode(latitude, longitude),
+            reverseGeocodePlace(latitude, longitude),
             resolveCityFromCoords(latitude, longitude).catch(() => null)
           ])
           const next = {

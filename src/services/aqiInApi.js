@@ -1,39 +1,22 @@
 /**
- * aqi.in public API (apiserver.aqi.in)
+ * aqi.in via ClimateEye backend (token stays server-side).
  *
- * Confirmed working (Bearer JWT):
- * - GET /aqi/v2/getNearestLocation?lat=&long=&type=1&source=web  → nearest stations
- * - GET /aqi/v2/getNearestLocation?lat=&long=&type=2&source=web  → nearest city
- * - GET /aqi/getNearestLocation?...                              → v1 (Locations key)
- * - GET /aqi/getAirQualityRanklistCountryAndCity?sensorname=aqi&type=2&limit=30&source=web
- * - GET /aqi/v2/getLast24HourHistory?slug=&sensorname=AQI-IN&slugType=cityId&source=web
- * - GET /aqi/getLast7DaysHistory?slug=&sensorname=AQI-IN&slugType=cityId|locationId&source=web
- * - GET /aqi/getLast30DaysHistory?slug=&sensorname=AQI-IN&slugType=cityId&source=web
- * - GET /aqi/v2/getAqiCalender?slug=&slugType=cityId&sensorname=AQI-IN&year=&source=web
- *
- * type=0 / type=3 on nearest → 400. Many other guessed paths → 404.
+ * Backend routes:
+ * - GET /api/aqi-in/nearest
+ * - GET /api/aqi-in/ranklist
+ * - GET /api/aqi-in/history?range=24h|7d|30d
+ * - GET /api/aqi-in/calendar
  */
 
-const AQI_IN_BASE = import.meta.env.DEV
-  ? '/aqi-in'
-  : (import.meta.env.VITE_AQI_IN_BASE || 'https://apiserver.aqi.in')
-
-const AQI_IN_TOKEN = import.meta.env.VITE_AQI_IN_TOKEN || ''
+const API_BASE = import.meta.env.DEV ? '/api' : 'https://climateye-apis.up.railway.app/api'
+const AQI_IN_BASE = `${API_BASE}/aqi-in`
 
 export const AQI_IN_TYPES = {
   STATION: 1,
   CITY: 2
 }
 
-const authHeaders = () => {
-  if (!AQI_IN_TOKEN) {
-    throw new Error('Missing VITE_AQI_IN_TOKEN. Add it to .env.local and restart the dev server.')
-  }
-  return {
-    Accept: 'application/json',
-    Authorization: `Bearer ${AQI_IN_TOKEN}`
-  }
-}
+const jsonHeaders = () => ({ Accept: 'application/json' })
 
 const toList = (payload) => {
   if (!payload) return []
@@ -70,8 +53,8 @@ export const fetchNearestLocation = async (
   })
 
   const response = await fetch(
-    `${AQI_IN_BASE}/aqi/v2/getNearestLocation?${params.toString()}`,
-    { method: 'GET', headers: authHeaders() }
+    `${AQI_IN_BASE}/nearest?${params.toString()}`,
+    { method: 'GET', headers: jsonHeaders() }
   )
 
   if (!response.ok) {
@@ -302,8 +285,8 @@ export const fetchAirQualityRanklist = async ({
   })
 
   const response = await fetch(
-    `${AQI_IN_BASE}/aqi/getAirQualityRanklistCountryAndCity?${params.toString()}`,
-    { method: 'GET', headers: authHeaders() }
+    `${AQI_IN_BASE}/ranklist?${params.toString()}`,
+    { method: 'GET', headers: jsonHeaders() }
   )
 
   if (!response.ok) {
@@ -482,18 +465,15 @@ export const aqiInLabel = (aqi) => {
 export const HISTORY_RANGES = {
   '24h': {
     id: '24h',
-    label: '24 Hours',
-    path: '/aqi/v2/getLast24HourHistory'
+    label: '24 Hours'
   },
   '7d': {
     id: '7d',
-    label: '7 Days',
-    path: '/aqi/getLast7DaysHistory'
+    label: '7 Days'
   },
   '30d': {
     id: '30d',
-    label: '30 Days',
-    path: '/aqi/getLast30DaysHistory'
+    label: '30 Days'
   }
 }
 
@@ -597,6 +577,7 @@ export const fetchAqiHistory = async (
   if (!slug) throw new Error('History slug is required')
 
   const params = new URLSearchParams({
+    range: String(rangeId),
     slug: String(slug),
     sensorname: String(sensorname),
     slugType: String(slugType),
@@ -604,8 +585,8 @@ export const fetchAqiHistory = async (
   })
 
   const response = await fetch(
-    `${AQI_IN_BASE}${range.path}?${params.toString()}`,
-    { method: 'GET', headers: authHeaders() }
+    `${AQI_IN_BASE}/history?${params.toString()}`,
+    { method: 'GET', headers: jsonHeaders() }
   )
 
   if (!response.ok) {
@@ -913,8 +894,8 @@ export const fetchAqiCalendar = async ({
   })
 
   const response = await fetch(
-    `${AQI_IN_BASE}/aqi/v2/getAqiCalender?${params.toString()}`,
-    { method: 'GET', headers: authHeaders() }
+    `${AQI_IN_BASE}/calendar?${params.toString()}`,
+    { method: 'GET', headers: jsonHeaders() }
   )
 
   if (!response.ok) {

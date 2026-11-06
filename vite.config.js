@@ -1,41 +1,24 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    port: 3000,
-    open: true,
-    proxy: {
-      '/api': {
-        target: 'https://climateye-apis.up.railway.app',
-        changeOrigin: true,
-        secure: true
-      },
-      '/ghgcenter': {
-        target: 'https://earth.gov',
-        changeOrigin: true,
-        secure: true,
-        rewrite: (path) => path.replace(/^\/ghgcenter/, '/ghgcenter')
-      },
-      // Register before '/open-meteo' so this path is not swallowed by that prefix.
-      '/air-quality-api': {
-        target: 'https://air-quality-api.open-meteo.com',
-        changeOrigin: true,
-        secure: true,
-        rewrite: (path) => path.replace(/^\/air-quality-api/, '')
-      },
-      '/open-meteo': {
-        target: 'https://api.open-meteo.com',
-        changeOrigin: true,
-        secure: true,
-        rewrite: (path) => path.replace(/^\/open-meteo/, '')
-      },
-      '/aqi-in': {
-        target: 'https://apiserver.aqi.in',
-        changeOrigin: true,
-        secure: true,
-        rewrite: (path) => path.replace(/^\/aqi-in/, '')
+export default defineConfig(({ mode }) => {
+  // .env.local is NOT on process.env here unless we loadEnv
+  const env = loadEnv(mode, process.cwd(), '')
+  const apiTarget = env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:5000'
+
+  console.log(`[vite] /api proxy → ${apiTarget}`)
+
+  return {
+    plugins: [react()],
+    server: {
+      port: 3000,
+      open: true,
+      proxy: {
+        '/api': {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: true
+        }
       }
     }
   }

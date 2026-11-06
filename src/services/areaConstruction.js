@@ -1,15 +1,9 @@
 import { pointInGeometry, ringCentroid } from '../utils/polygonIndex'
 
-// Live OpenStreetMap construction for whatever area was drawn. Public servers are often busy,
-// so each box tries the next mirror. Results are cached for the session.
-// These mirrors answered a construction query in a few seconds. The main overpass-api.de server
-// often returns 504, and overpass.osm.ch answers quickly with an empty list, so neither is used.
-const OVERPASS_URLS = [
-  'https://z.overpass-api.de/api/interpreter',
-  'https://lz4.overpass-api.de/api/interpreter',
-  'https://overpass.openstreetmap.fr/api/interpreter'
-]
-const SERVER_TIMEOUT_MS = 25000
+// Live OpenStreetMap construction via ClimateEye backend → Overpass mirrors.
+const API_BASE = import.meta.env.DEV ? '/api' : 'https://climateye-apis.up.railway.app/api'
+const OVERPASS_URL = `${API_BASE}/osm/overpass`
+const SERVER_TIMEOUT_MS = 30000
 const CELL_KM2 = 8
 const MAX_CELLS = 12
 const FLOOR_HEIGHT = 3
@@ -116,27 +110,17 @@ const queryOnce = async (box) => {
     way["building:construction"](${box.minLat},${box.minLng},${box.maxLat},${box.maxLng});
     way["building"]["construction"](${box.minLat},${box.minLng},${box.maxLat},${box.maxLng});
   );out geom tags;`
-  const body = `data=${encodeURIComponent(query)}`
-  const failures = []
-  let empty = null
-  for (const url of OVERPASS_URLS) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-        signal: AbortSignal.timeout(SERVER_TIMEOUT_MS)
-      })
-      if (!response.ok) throw new Error(String(response.status))
-      const data = await response.json()
-      if ((data.elements || []).length > 0) return data
-      empty = data
-    } catch (err) {
-      failures.push(`${new URL(url).host} ${err.name === 'TimeoutError' ? 'timeout' : err.message}`)
-    }
+  const response = await fetch(OVERPASS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: query }),
+    signal: AbortSignal.timeout(SERVER_TIMEOUT_MS)
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.error || err.details?.join?.('; ') || `Overpass error ${response.status}`)
   }
-  if (empty) return empty
-  throw new Error(failures.join('; ') || 'all servers busy')
+  return response.json()
 }
 
 const queryBox = async (box, depth = 0) => {

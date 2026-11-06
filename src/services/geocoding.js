@@ -1,4 +1,4 @@
-const PHOTON_URL = 'https://photon.komoot.io/api/'
+const API_BASE = import.meta.env.DEV ? '/api' : 'https://climateye-apis.up.railway.app/api'
 // Results are biased towards India but places elsewhere are still found
 const BIAS_CENTER = { lat: 22.5, lon: 79 }
 
@@ -52,7 +52,7 @@ const toPlace = (feature) => {
 }
 
 /**
- * Search cities, towns, villages and other named places (OpenStreetMap data via Photon)
+ * Search cities, towns, villages and other named places (via ClimateEye → Photon)
  */
 export const searchPlaces = async (query, signal) => {
   const params = new URLSearchParams({
@@ -63,7 +63,7 @@ export const searchPlaces = async (query, signal) => {
     lon: String(BIAS_CENTER.lon),
     osm_tag: 'place'
   })
-  const response = await fetch(`${PHOTON_URL}?${params}`, { signal })
+  const response = await fetch(`${API_BASE}/geocode/search?${params}`, { signal })
   if (!response.ok) throw new Error(`Search failed (${response.status})`)
   const data = await response.json()
   const seen = new Set()
@@ -74,4 +74,36 @@ export const searchPlaces = async (query, signal) => {
       seen.add(place.id)
       return true
     })
+}
+
+/** Reverse geocode via ClimateEye → Nominatim (raw payload) */
+export const reverseGeocode = async (latitude, longitude, { zoom = 10, signal } = {}) => {
+  const params = new URLSearchParams({
+    lat: String(latitude),
+    lon: String(longitude),
+    zoom: String(zoom),
+    addressdetails: '1'
+  })
+  const response = await fetch(`${API_BASE}/geocode/reverse?${params}`, {
+    headers: { Accept: 'application/json' },
+    signal
+  })
+  if (!response.ok) return null
+  return response.json()
+}
+
+/** Reverse geocode → { city, state, country } */
+export const reverseGeocodePlace = async (latitude, longitude) => {
+  try {
+    const data = await reverseGeocode(latitude, longitude)
+    if (!data) return null
+    const a = data.address || {}
+    return {
+      city: a.city || a.town || a.village || a.suburb || a.county || 'Your area',
+      state: a.state || a.region || '',
+      country: a.country || ''
+    }
+  } catch {
+    return null
+  }
 }

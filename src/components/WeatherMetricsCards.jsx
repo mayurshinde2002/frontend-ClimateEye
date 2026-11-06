@@ -23,7 +23,14 @@ const WeatherMetricsCards = ({ geometry, date, isLive = false }) => {
   const fetchLocationName = async (lat, lng) => {
     try {
       // Using Open-Meteo geocoding API (free, no key required)
-      const response = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=&latitude=${lat}&longitude=${lng}&count=1`)
+      const API_BASE = import.meta.env.DEV ? '/api' : 'https://climateye-apis.up.railway.app/api'
+      const params = new URLSearchParams({
+        name: '',
+        latitude: String(lat),
+        longitude: String(lng),
+        count: '1'
+      })
+      const response = await fetch(`${API_BASE}/geocode/openmeteo?${params}`)
       const data = await response.json()
       if (data.results && data.results.length > 0) {
         setLocation(data.results[0].name || 'Location')

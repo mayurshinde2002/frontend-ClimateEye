@@ -1,9 +1,6 @@
 import { pointInGeometry, ringCentroid } from '../utils/polygonIndex'
 
 const API_BASE_URL = import.meta.env.DEV ? '/api' : 'https://climateye-apis.up.railway.app/api'
-const OPEN_METEO_AIR_BASE = import.meta.env.DEV
-  ? '/air-quality-api'
-  : 'https://air-quality-api.open-meteo.com'
 
 /** CAMS global methane is coarse (~0.4°). Sample AOI at ~0.2° for a smooth field. */
 const CAMS_METHANE_GRID_DEG = 0.2
@@ -192,37 +189,15 @@ export const fetchHourlyWeatherData = async (latitude, longitude, date) => {
 
 /**
  * Hourly rain forecast via backend → Open-Meteo
- * https://api.open-meteo.com/v1/forecast?hourly=rain
- * Dev falls back to Vite /open-meteo proxy if the Railway route is not deployed yet.
  */
 export const fetchOpenMeteoRainForecast = async (latitude, longitude) => {
-  const body = JSON.stringify({ latitude, longitude })
-  try {
-    const response = await fetch(`${API_BASE_URL}/weather/rain-forecast`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body
-    })
-    if (response.ok) return response.json()
-  } catch (error) {
-    if (!import.meta.env.DEV) {
-      console.error('Error fetching rain forecast:', error)
-      throw error
-    }
-  }
-
-  if (!import.meta.env.DEV) {
-    throw new Error('Rain forecast API error')
-  }
-
-  const params = new URLSearchParams({
-    latitude: String(latitude),
-    longitude: String(longitude),
-    hourly: 'rain'
+  const response = await fetch(`${API_BASE_URL}/weather/rain-forecast`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ latitude, longitude })
   })
-  const response = await fetch(`/open-meteo/v1/forecast?${params}`)
   if (!response.ok) {
-    throw new Error(`Open-Meteo rain forecast error: ${response.statusText}`)
+    throw new Error(`Rain forecast API error: ${response.statusText}`)
   }
   return response.json()
 }
@@ -679,40 +654,6 @@ export const sampleCamsMethanePoints = (geometry) => {
   return points
 }
 
-const pickCurrentMethane = (hourly) => {
-  const times = hourly?.time || []
-  const values = hourly?.methane || []
-  if (!times.length || !values.length) return { value: null, time: null, index: -1 }
-
-  const now = Date.now()
-  let bestIdx = -1
-  let bestDiff = Infinity
-  times.forEach((t, i) => {
-    if (values[i] == null || !Number.isFinite(Number(values[i]))) return
-    const diff = Math.abs(new Date(t).getTime() - now)
-    if (diff < bestDiff) {
-      bestDiff = diff
-      bestIdx = i
-    }
-  })
-
-  if (bestIdx < 0) {
-    for (let i = values.length - 1; i >= 0; i -= 1) {
-      if (values[i] != null && Number.isFinite(Number(values[i]))) {
-        bestIdx = i
-        break
-      }
-    }
-  }
-
-  if (bestIdx < 0) return { value: null, time: null, index: -1 }
-  return {
-    value: Number(values[bestIdx]),
-    time: times[bestIdx] || null,
-    index: bestIdx
-  }
-}
-
 const mapPool = async (items, limit, worker) => {
   const results = new Array(items.length)
   let next = 0
@@ -728,33 +669,21 @@ const mapPool = async (items, limit, worker) => {
 }
 
 export const fetchOpenMeteoMethanePoint = async (latitude, longitude, { pastDays = 2, forecastDays = 1 } = {}) => {
-  const params = new URLSearchParams({
-    latitude: String(latitude),
-    longitude: String(longitude),
-    hourly: 'methane',
-    timezone: 'auto',
-    past_days: String(pastDays),
-    forecast_days: String(forecastDays)
+  const response = await fetch(`${API_BASE_URL}/cams/methane`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      latitude,
+      longitude,
+      past_days: pastDays,
+      forecast_days: forecastDays
+    })
   })
-  const response = await fetch(`${OPEN_METEO_AIR_BASE}/v1/air-quality?${params}`)
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
     throw new Error(data.reason || data.error || `Methane request failed (${response.status})`)
   }
-  const current = pickCurrentMethane(data.hourly)
-  const hourly = (data.hourly?.time || []).map((time, i) => ({
-    time,
-    methane: data.hourly?.methane?.[i] == null ? null : Number(data.hourly.methane[i])
-  }))
-  return {
-    latitude: data.latitude ?? latitude,
-    longitude: data.longitude ?? longitude,
-    elevation: data.elevation ?? null,
-    methane_ug_m3: current.value,
-    observed_at: current.time,
-    unit: data.hourly_units?.methane || 'μg/m³',
-    hourly
-  }
+  return data
 }
 
 /**
@@ -832,183 +761,21 @@ export const fetchOpenMeteoMethaneForGeometry = async (geometry) => {
   }
 }
 
-const EMIT_GHG_BASE = import.meta.env.DEV
-  ? '/ghgcenter'
-  : 'https://earth.gov/ghgcenter'
-
-const EMIT_COLLECTION = 'emit-ch4plume-v1'
-const EMIT_MAX_PLUMES = 8
-const EMIT_PLUME_PALETTE = [
-  '#000004',
-  '#1b0c41',
-  '#4a0c6b',
-  '#781c6d',
-  '#a52c60',
-  '#cf4446',
-  '#ed6925',
-  '#fb9b06',
-  '#fcffa4'
-]
-
-const rewriteEmitUrl = (url) => {
-  if (!url || !import.meta.env.DEV) return url
-  return String(url).replace('https://earth.gov/ghgcenter', '/ghgcenter')
-}
-
-const emitBboxCenter = (bbox) => {
-  if (!Array.isArray(bbox) || bbox.length < 4) return null
-  const [minLng, minLat, maxLng, maxLat] = bbox.map(Number)
-  if (![minLng, minLat, maxLng, maxLat].every(Number.isFinite)) return null
-  return {
-    lng: (minLng + maxLng) / 2,
-    lat: (minLat + maxLat) / 2
-  }
-}
-
-const fetchEmitTileJson = async (itemId) => {
-  const params = new URLSearchParams({
-    assets: 'ch4-plume-emissions',
-    colormap_name: 'magma',
-    rescale: '1,1500',
-    nodata: '-9999',
-    resampling: 'bilinear',
-    color_formula: 'gamma r 1.05'
-  })
-  const url =
-    `${EMIT_GHG_BASE}/api/raster/collections/${EMIT_COLLECTION}/items/` +
-    `${encodeURIComponent(itemId)}/WebMercatorQuad/tilejson.json?${params}`
-  const response = await fetch(url)
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(data.detail || data.message || `EMIT tile request failed (${response.status})`)
-  }
-  const tileTemplate = rewriteEmitUrl(data.tiles?.[0])
-  return {
-    itemId,
-    tileUrl: tileTemplate || null,
-    bounds: data.bounds || null,
-    center: data.center || null
-  }
-}
-
 /**
- * Public NASA EMIT methane plumes for a bbox (origin markers + spread tiles).
- * Observation-based — not hourly.
+ * Public NASA EMIT methane plumes for a bbox (via ClimateEye → US GHG Center).
  */
 export const fetchEmitMethanePlumes = async ({ bounds, startDate, endDate } = {}) => {
   if (!bounds) {
     throw new Error('Bounds are required for EMIT plume search')
   }
-
-  const search = async (withDates) => {
-    const params = new URLSearchParams({
-      bbox: bounds,
-      limit: String(EMIT_MAX_PLUMES)
-    })
-    if (withDates && startDate && endDate) {
-      params.set('datetime', `${startDate}T00:00:00Z/${endDate}T23:59:59Z`)
-    }
-    const response = await fetch(
-      `${EMIT_GHG_BASE}/api/stac/collections/${EMIT_COLLECTION}/items?${params}`
-    )
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok) {
-      throw new Error(data.detail || data.message || `EMIT search failed (${response.status})`)
-    }
-    return data.features || []
+  const params = new URLSearchParams({ bbox: String(bounds) })
+  if (startDate) params.set('startDate', startDate)
+  if (endDate) params.set('endDate', endDate)
+  const response = await fetch(`${API_BASE_URL}/emit/plumes?${params}`)
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.error || data.detail || data.message || `EMIT search failed (${response.status})`)
   }
-
-  let items = await search(true)
-  let dateFallback = false
-  if (!items.length && startDate && endDate) {
-    items = await search(false)
-    dateFallback = items.length > 0
-  }
-
-  if (!items.length) {
-    return {
-      mode: 'emit-plume',
-      features: [],
-      tileUrls: [],
-      count: 0,
-      legend: {
-        title: 'EMIT plume enhancement',
-        unit: 'ppm-m',
-        min: 1,
-        max: 1500,
-        palette: EMIT_PLUME_PALETTE
-      },
-      attribution: 'NASA EMIT · US GHG Center',
-      note: 'No EMIT methane plumes found in this area for the selected dates.',
-      dateLabel: startDate && endDate ? `${startDate} to ${endDate}` : null
-    }
-  }
-
-  const tiles = await mapPool(items.slice(0, EMIT_MAX_PLUMES), 3, async (item) => {
-    try {
-      const tile = await fetchEmitTileJson(item.id)
-      return { item, tile }
-    } catch (err) {
-      return { item, error: err.message }
-    }
-  })
-
-  const ok = tiles.filter((row) => row.tile?.tileUrl)
-  const features = ok.map(({ item, tile }, index) => {
-    const center =
-      emitBboxCenter(item.bbox) ||
-      (tile.center
-        ? { lng: Number(tile.center[0]), lat: Number(tile.center[1]) }
-        : null)
-    if (!center) return null
-    const observed = item.properties?.datetime || null
-    return {
-      type: 'Feature',
-      id: item.id || `emit-${index}`,
-      geometry: {
-        type: 'Point',
-        coordinates: [center.lng, center.lat]
-      },
-      properties: {
-        source: 'emit',
-        mode: 'emit-plume',
-        methane_enhancement_ppm_m: null,
-        confidence: 'high',
-        observed_at: observed,
-        item_id: item.id,
-        bbox: item.bbox || null
-      }
-    }
-  }).filter(Boolean)
-
-  const tileUrls = ok.map(({ tile }) => tile.tileUrl).filter(Boolean)
-  const dates = ok
-    .map(({ item }) => item.properties?.datetime)
-    .filter(Boolean)
-    .map((d) => String(d).slice(0, 10))
-  const uniqueDates = [...new Set(dates)]
-
-  return {
-    mode: 'emit-plume',
-    features,
-    tileUrls,
-    count: features.length,
-    legend: {
-      title: 'EMIT plume enhancement',
-      unit: 'ppm-m',
-      min: 1,
-      max: 1500,
-      palette: EMIT_PLUME_PALETTE
-    },
-    attribution: 'NASA EMIT · US GHG Center',
-    note: dateFallback
-      ? `No EMIT plumes in the selected dates; showing ${features.length} plume(s) available in this area.`
-      : `${features.length} EMIT plume(s) · origin markers + spread tiles (ppm-m).`,
-    dateLabel: uniqueDates.length
-      ? uniqueDates.slice(0, 3).join(', ') + (uniqueDates.length > 3 ? '…' : '')
-      : startDate && endDate
-        ? `${startDate} to ${endDate}`
-        : null
-  }
+  return data
 }
 
