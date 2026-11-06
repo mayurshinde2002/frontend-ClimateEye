@@ -476,6 +476,8 @@ const createRequestPool = (concurrency) => {
   })
 }
 
+
+
 const buildingFeatureKey = (feature) => {
   const centroid = ringCentroid(feature.geometry)
   const kind = feature.properties?.detection || ''
