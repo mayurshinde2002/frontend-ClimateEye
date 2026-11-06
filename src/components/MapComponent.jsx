@@ -632,8 +632,11 @@ const MapComponent = ({
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
             const props = feature.properties || {}
             const isEmit = props.source === 'emit'
+            const isS5p = props.source === 's5p' || methaneOverlay?.mode === 's5p'
             const fill = colorForEnhancement(
-              props.methane_enhancement_ppm_m ?? (isEmit ? methaneOverlay.legend?.max : null),
+              props.methane_ppb
+                ?? props.methane_enhancement_ppm_m
+                ?? (isEmit ? methaneOverlay.legend?.max : null),
               methaneOverlay.legend
             )
             const confidence = props.confidence || 'medium'
@@ -641,10 +644,10 @@ const MapComponent = ({
               <CircleMarker
                 key={feature.id || `${lat}-${lng}`}
                 center={[lat, lng]}
-                radius={isEmit || confidence === 'high' ? 9 : 7}
+                radius={isS5p || isEmit || confidence === 'high' ? 10 : 7}
                 pathOptions={{
-                  color: '#fb9b06',
-                  fillColor: isEmit ? '#1b0c41' : fill,
+                  color: isS5p ? '#38bdf8' : '#fb9b06',
+                  fillColor: isS5p ? fill : (isEmit ? '#1b0c41' : fill),
                   fillOpacity: 0.9,
                   weight: 2.5
                 }}
@@ -652,9 +655,32 @@ const MapComponent = ({
                 <Popup>
                   <div className="methane-popup">
                     <strong>
-                      {isEmit ? 'EMIT methane plume' : 'Methane plume'}
+                      {isS5p
+                        ? 'Sentinel-5P methane (XCH₄)'
+                        : isEmit
+                          ? 'EMIT methane plume'
+                          : 'Methane plume'}
                     </strong>
-                    {props.methane_enhancement_ppm_m != null && (
+                    {isS5p && props.methane_ppb != null && (
+                      <div>
+                        Methane: {Number(props.methane_ppb).toFixed(2)} {props.unit || 'ppb'}
+                      </div>
+                    )}
+                    {isS5p && props.uncertainty_ppb != null && (
+                      <div>Uncertainty: ±{Number(props.uncertainty_ppb).toFixed(2)} ppb</div>
+                    )}
+                    {isS5p && props.data_date && (
+                      <div>
+                        Scene date: {props.data_date}
+                        {props.requested_date && props.requested_date !== props.data_date
+                          ? ` (requested ${props.requested_date})`
+                          : ''}
+                      </div>
+                    )}
+                    {isS5p && props.resolution_km != null && (
+                      <div>Resolution: ~{props.resolution_km} km</div>
+                    )}
+                    {!isS5p && props.methane_enhancement_ppm_m != null && (
                       <div>
                         Enhancement:{' '}
                         {Number(props.methane_enhancement_ppm_m).toFixed(1)} ppm·m
@@ -665,7 +691,7 @@ const MapComponent = ({
                         Origin marker · spread shown as EMIT enhancement tiles
                       </div>
                     )}
-                    <div>Confidence: {confidence}</div>
+                    {!isS5p && <div>Confidence: {confidence}</div>}
                     {props.observed_at && (
                       <div>
                         Observed:{' '}
@@ -717,7 +743,9 @@ const MapComponent = ({
             <span>
               {methaneOverlay?.mode === 'cams-hourly'
                 ? 'Live / Hourly Methane (CAMS)'
-                : 'Plume Methane (origin + spread)'}
+                : methaneOverlay?.mode === 's5p'
+                  ? 'S5P Methane (Sentinel-5P / TROPOMI)'
+                  : 'Plume Methane (origin + spread)'}
             </span>
             {onClearMethane && (
               <button type="button" className="methane-legend-close" onClick={onClearMethane}>
@@ -740,7 +768,11 @@ const MapComponent = ({
                 <span>
                   {methaneOverlay.legend?.title || 'Methane'} (
                   {methaneOverlay.legend?.unit ||
-                    (methaneOverlay.mode === 'cams-hourly' ? 'μg/m³' : 'ppm-m')}
+                    (methaneOverlay.mode === 'cams-hourly'
+                      ? 'μg/m³'
+                      : methaneOverlay.mode === 's5p'
+                        ? 'ppb'
+                        : 'ppm-m')}
                   )
                 </span>
                 <span>{methaneOverlay.legend?.max ?? 300}</span>
@@ -748,6 +780,13 @@ const MapComponent = ({
               <p className="methane-legend-note">
                 {methaneOverlay.mode === 'cams-hourly'
                   ? `${methaneOverlay.count ?? methaneOverlay.features?.length ?? 0} CAMS sample(s)`
+                  : methaneOverlay.mode === 's5p'
+                    ? [
+                        methaneOverlay.features?.[0]?.properties?.methane_ppb != null
+                          ? `${Number(methaneOverlay.features[0].properties.methane_ppb).toFixed(1)} ppb at AOI center`
+                          : 'S5P column methane',
+                        methaneOverlay.note || null
+                      ].filter(Boolean).join(' · ')
                   : [
                       methaneOverlay.archiveCount > 0
                         ? `${methaneOverlay.archiveCount} archive plume(s)`
@@ -763,7 +802,11 @@ const MapComponent = ({
                       .filter(Boolean)
                       .join(' · ') ||
                     `${methaneOverlay.count ?? methaneOverlay.features?.length ?? 0} plume(s)`}
-                {methaneOverlay.dateLabel ? ` · ${methaneOverlay.dateLabel}` : ''}
+                {methaneOverlay.mode !== 's5p' && methaneOverlay.dateLabel
+                  ? ` · ${methaneOverlay.dateLabel}`
+                  : methaneOverlay.mode === 's5p' && methaneOverlay.dateLabel
+                    ? ` · scene ${methaneOverlay.dateLabel}`
+                    : ''}
               </p>
               {methaneOverlay.mode === 'cams-hourly' && methaneOverlay.hourly?.length > 0 && (
                 <div className="methane-hourly-spark">

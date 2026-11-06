@@ -12,7 +12,7 @@ import AQISection from './AQISection'
 import AqiWorkspace from './AqiWorkspace'
 import WeatherWorkspace from './WeatherWorkspace'
 import LiveDashboardCards from './LiveDashboardCards'
-import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData, fetchMethaneCatalog, fetchMethanePlumes, fetchMethaneTiles, fetchOpenMeteoMethaneForGeometry, fetchEmitMethanePlumes, boundsFromGeometry, resolveMethaneDateRange } from '../services/api'
+import { calculateGeometryCenter, fetchAQIData, fetchWeatherData, fetchHourlyAQIDataRange, fetchHourlyWeatherData, fetchHourlyAQIData, fetchMethaneCatalog, fetchMethanePlumes, fetchMethaneTiles, fetchOpenMeteoMethaneForGeometry, fetchEmitMethanePlumes, fetchMethaneS5p, buildS5pMethaneOverlay, boundsFromGeometry, resolveMethaneDateRange } from '../services/api'
 import { resolveCityFromCoords } from '../services/aqiInApi'
 import './Dashboard.css'
 import './DatePicker.css'
@@ -435,6 +435,56 @@ const Dashboard = () => {
       setMethaneOverlay(null)
       setMethaneError(err.message)
       alert(`Live methane failed: ${err.message}`)
+    } finally {
+      setMethaneLoading(false)
+      setMethaneLoadingMode(null)
+    }
+  }
+
+  const handleS5pMethane = async () => {
+    if (!drawnGeometry && !uploadedKML) {
+      alert('Please draw an area or upload a KML file first')
+      return
+    }
+
+    setMethaneLoading(true)
+    setMethaneLoadingMode('s5p')
+    setMethaneError(null)
+
+    try {
+      const geometry = resolveSelectedGeometry()
+      if (!geometry) {
+        throw new Error('Could not parse geometry')
+      }
+
+      const center = calculateGeometryCenter(geometry)
+      if (!center) {
+        throw new Error('Could not calculate the selected area center')
+      }
+
+      // Single-date S5P query — use the UI end date (falls back to start date)
+      const requestedDate = endDate || startDate
+      if (!requestedDate) {
+        throw new Error('Select a date first')
+      }
+
+      const data = await fetchMethaneS5p({
+        latitude: center.latitude,
+        longitude: center.longitude,
+        date: requestedDate
+      })
+
+      setMethaneOverlay(
+        buildS5pMethaneOverlay(data, {
+          latitude: center.latitude,
+          longitude: center.longitude,
+          requestedDate
+        })
+      )
+    } catch (err) {
+      setMethaneOverlay(null)
+      setMethaneError(err.message)
+      alert(`S5P methane failed: ${err.message}`)
     } finally {
       setMethaneLoading(false)
       setMethaneLoadingMode(null)
@@ -1802,6 +1852,16 @@ const Dashboard = () => {
                     <span className="label-short">{methaneLoadingMode === 'cams-hourly' ? '…' : 'Live CH₄'}</span>
                   </button>
                   <button
+                    className={`view-toggle-button ${methaneOverlay?.mode === 's5p' ? 'active' : ''}`}
+                    onClick={handleS5pMethane}
+                    disabled={methaneLoading || loading}
+                    type="button"
+                    title="Sentinel-5P TROPOMI methane at AOI center for the selected end date"
+                  >
+                    <span className="label-full">{methaneLoadingMode === 's5p' ? 'Loading…' : 'S5P Methane'}</span>
+                    <span className="label-short">{methaneLoadingMode === 's5p' ? '…' : 'S5P'}</span>
+                  </button>
+                  <button
                     className={`view-toggle-button ${show3DView ? 'active' : ''}`}
                     onClick={handleOpen3DView}
                     disabled={!selectedGeometry && !mapView}
@@ -2096,6 +2156,16 @@ const Dashboard = () => {
                   >
                     <span className="label-full">{methaneLoadingMode === 'cams-hourly' ? 'Loading…' : 'Live Methane'}</span>
                     <span className="label-short">{methaneLoadingMode === 'cams-hourly' ? '…' : 'Live CH₄'}</span>
+                  </button>
+                  <button
+                    className={`view-toggle-button ${methaneOverlay?.mode === 's5p' ? 'active' : ''}`}
+                    onClick={handleS5pMethane}
+                    disabled={methaneLoading || loading}
+                    type="button"
+                    title="Sentinel-5P TROPOMI methane at AOI center for the selected end date"
+                  >
+                    <span className="label-full">{methaneLoadingMode === 's5p' ? 'Loading…' : 'S5P Methane'}</span>
+                    <span className="label-short">{methaneLoadingMode === 's5p' ? '…' : 'S5P'}</span>
                   </button>
                   <button
                     className={`view-toggle-button ${show3DView ? 'active' : ''}`}

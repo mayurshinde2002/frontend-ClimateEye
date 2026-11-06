@@ -598,6 +598,128 @@ export const fetchMethaneTiles = async (query) => {
   return readApiJson(response)
 }
 
+const S5P_METHANE_PALETTE = [
+  '#0b1026',
+  '#1b0c41',
+  '#4a0c6b',
+  '#781c6d',
+  '#a52c60',
+  '#cf4446',
+  '#ed6925',
+  '#fb9b06',
+  '#fcffa4'
+]
+
+/**
+ * Sentinel-5P TROPOMI column methane (XCH₄) for one point + date.
+ * POST /api/methane/s5p  { latitude, longitude, date }
+ */
+export const fetchMethaneS5p = async ({ latitude, longitude, date }) => {
+  const lat = Number(latitude)
+  const lng = Number(longitude)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    throw new Error('Valid latitude and longitude are required for S5P methane')
+  }
+  if (!date) {
+    throw new Error('A date is required for S5P methane')
+  }
+
+  const response = await fetch(`${API_BASE_URL}/methane/s5p`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      latitude: lat,
+      longitude: lng,
+      date: String(date)
+    })
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `S5P methane request failed (${response.status})`)
+  }
+  return data
+}
+
+/**
+ * Build a map overlay from an S5P point response (AOI center + selected date).
+ */
+export const buildS5pMethaneOverlay = (data, { latitude, longitude, requestedDate } = {}) => {
+  const lat = Number(data?.latitude ?? latitude)
+  const lng = Number(data?.longitude ?? longitude)
+  const value = Number(
+    data?.methane_ppb
+    ?? data?.methane_ppb_bias_corrected
+    ?? data?.value
+  )
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(value)) {
+    throw new Error(data?.message || 'No S5P methane value returned for this location/date')
+  }
+
+  const available = Array.isArray(data?.available_dates) ? data.available_dates : []
+  const seriesValues = [
+    value,
+    ...available.map((row) => Number(row?.methane_ppb)).filter(Number.isFinite)
+  ]
+  const min = Math.floor(Math.min(...seriesValues) - 5)
+  const max = Math.ceil(Math.max(...seriesValues) + 5)
+
+  const observed = Array.isArray(data?.observed_at)
+    ? data.observed_at[0]
+    : data?.observed_at || null
+
+  const feature = {
+    type: 'Feature',
+    id: `s5p-${lat.toFixed(4)}-${lng.toFixed(4)}-${data?.data_date || requestedDate}`,
+    geometry: {
+      type: 'Point',
+      coordinates: [lng, lat]
+    },
+    properties: {
+      source: 's5p',
+      mode: 's5p',
+      methane_ppb: value,
+      methane_ppb_raw: data?.methane_ppb_raw ?? null,
+      methane_enhancement_ppm_m: value,
+      uncertainty_ppb: data?.uncertainty_ppb ?? null,
+      observed_at: observed,
+      data_date: data?.data_date || data?.image_date || null,
+      requested_date: data?.date || requestedDate || null,
+      exact_date_match: Boolean(data?.exact_date_match),
+      resolution_km: data?.resolution_km ?? 5.5,
+      unit: data?.units || 'ppb',
+      confidence: 'model'
+    }
+  }
+
+  const noteParts = [
+    data?.message,
+    data?.exact_date_match === false && data?.data_date
+      ? `Showing nearest scene on ${data.data_date}.`
+      : null,
+    `Sentinel-5P XCH₄ · ~${data?.resolution_km ?? 5.5} km resolution (column average, not an emission rate).`
+  ].filter(Boolean)
+
+  return {
+    mode: 's5p',
+    tileUrl: null,
+    tileUrls: [],
+    features: [feature],
+    count: 1,
+    legend: {
+      title: 'S5P methane (XCH₄)',
+      unit: data?.units || 'ppb',
+      min,
+      max,
+      palette: S5P_METHANE_PALETTE
+    },
+    attribution: data?.source || 'Sentinel-5P TROPOMI',
+    dateLabel: data?.data_date || data?.image_date || requestedDate || null,
+    note: noteParts.join(' '),
+    availableDates: available,
+    raw: data
+  }
+}
+
 const geometryBBox = (geometry) => {
   const ring = geometry?.coordinates?.[0]
   if (!ring?.length) return null
